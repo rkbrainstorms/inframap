@@ -29,6 +29,7 @@ def pivot_urlscan(domain: str = None, ip: str = None,
         "results":   [],
         "ips_seen":  set(),
         "asns_seen": set(),
+        "asn_names": {},
         "countries": set(),
         "page_titles": [],
         "submission_timeline": [],
@@ -71,7 +72,12 @@ def pivot_urlscan(domain: str = None, ip: str = None,
                     if parsed.get("ip"):
                         result["ips_seen"].add(parsed["ip"])
                     if parsed.get("asn"):
-                        result["asns_seen"].add(parsed["asn"])
+                        asn = parsed["asn"]
+                        asn_name = parsed.get("asn_name", "")
+                        result["asns_seen"].add(asn)
+                        # Store ASN names for display
+                        if asn and asn_name:
+                            result["asn_names"][asn] = asn_name
                     if parsed.get("country"):
                         result["countries"].add(parsed["country"])
                     if parsed.get("title"):

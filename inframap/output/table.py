@@ -83,8 +83,17 @@ def print_summary(report: dict, no_color: bool = False):
         cols.append(f"domains: {infra['unique_domains']}")
     if infra.get("urlscan_hits") is not None:
         cols.append(f"urlscan hits: {infra['urlscan_hits']}")
+    if infra.get("domain_age_days") is not None:
+        age = infra["domain_age_days"]
+        age_str = f"{age}d old"
+        age_col = BRED if age < 30 else BYEL if age < 90 else DIM
+        cols.append(f"domain age: {_c(age_col, age_str)}")
+    if infra.get("registrar"):
+        cols.append(f"registrar: {infra['registrar']}")
     if infra.get("asn"):
-        cols.append(f"ASN: {infra['asn']} ({infra.get('asn_name', '')})")
+        asn_name = infra.get("asn_name", "")
+        asn_str  = f"{infra['asn']} ({asn_name})" if asn_name else infra["asn"]
+        cols.append(f"ASN: {asn_str}")
     if infra.get("hosting_risk"):
         risk = infra["hosting_risk"]
         rc = BRED if risk == "HIGH-RISK" else BYEL if risk == "SUSPICIOUS" else DIM

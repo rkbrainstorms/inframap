@@ -63,7 +63,23 @@ def pivot_rdap(domain: str, timeout: int = 10) -> dict:
     # Generate WHOIS fingerprint for clustering
     result["whois_fp"] = _fingerprint(result)
 
+    # Calculate domain age
+    result["domain_age_days"] = _calc_age(result.get("dates", {}))
+
     return result
+
+
+def _calc_age(dates: dict) -> int | None:
+    """Calculate domain age in days from registration date."""
+    registered = dates.get("registration") or dates.get("registrationdate", "")
+    if not registered:
+        return None
+    try:
+        from datetime import datetime, timezone
+        reg_date = datetime.fromisoformat(registered.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - reg_date).days
+    except Exception:
+        return None
 
 
 def _resolve_rdap_server(domain: str, timeout: int) -> str | None:

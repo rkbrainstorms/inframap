@@ -22,7 +22,24 @@ CRT_SH_URL = "https://crt.sh/?output=json&q={query}"
 USER_AGENT  = "inframap/1.0 (github.com/rhishav/inframap; CTI research)"
 
 
-def pivot_crtsh(domain: str, timeout: int = 10, wildcard: bool = True) -> dict:
+def _fetch_crtsh(url: str, timeout: int, retries: int = 3) -> list:
+    """Fetch crt.sh with retry logic."""
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise e
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)  # exponential backoff: 1s, 2s
+                continue
+            raise e
+    return []
+
+
+def pivot_crtsh(domain: str, timeout: int = 15, wildcard: bool = True) -> dict:
     """
     Query crt.sh for certificates associated with a domain.
     Returns parsed cert list, extracted names, issuers, and timing clusters.
@@ -49,14 +66,12 @@ def pivot_crtsh(domain: str, timeout: int = 10, wildcard: bool = True) -> dict:
         encoded = urllib.parse.quote(q, safe="")
         url     = CRT_SH_URL.format(query=encoded)
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                for cert in data:
-                    cid = cert.get("id")
-                    if cid and cid not in seen_ids:
-                        seen_ids.add(cid)
-                        raw_certs.append(cert)
+            data = _fetch_crtsh(url, timeout)
+            for cert in data:
+                cid = cert.get("id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    raw_certs.append(cert)
         except urllib.error.HTTPError as e:
             results["errors"].append(f"crt.sh HTTP {e.code} for query '{q}'")
         except Exception as e:
