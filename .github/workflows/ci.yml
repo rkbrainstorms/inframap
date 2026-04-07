@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.10", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Verify zero dependencies
+      run: |
+        # inframap should have no external dependencies
+        pip list | grep -v "^pip\|^setuptools\|^wheel\|^Package\|^---" | wc -l
+
+    - name: Run tests
+      run: |
+        python3 tests/test_inframap.py
+
+    - name: Test CLI entry point
+      run: |
+        python3 inframap.py --version
+        python3 inframap.py --help
+
+    - name: Test pip install from source
+      run: |
+        pip install -e .
+        inframap --version

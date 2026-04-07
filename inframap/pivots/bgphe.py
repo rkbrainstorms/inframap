@@ -30,6 +30,25 @@ KNOWN_BULLETPROOF_ASNS = {
     "AS59477",   # Serverius (NL)
 }
 
+# Known-clean ASNs — never flag these regardless of peer count or country
+KNOWN_CLEAN_ASNS = {
+    "AS15169",  # Google
+    "AS8075",   # Microsoft
+    "AS16509",  # Amazon AWS
+    "AS14618",  # Amazon
+    "AS13335",  # Cloudflare
+    "AS20940",  # Akamai
+    "AS54113",  # Fastly
+    "AS16625",  # Akamai
+    "AS396982", # Google Cloud
+    "AS19551",  # Imperva/Incapsula
+    "AS209242", # Cloudflare R2
+    "AS32934",  # Facebook/Meta
+    "AS2906",   # Netflix
+    "AS714",    # Apple
+    "AS24940",  # Hetzner (legit)
+}
+
 
 def pivot_bgphe(ip: str, timeout: int = 10) -> dict:
     """
@@ -131,9 +150,17 @@ def _score_bulletproof(result: dict):
     """
     Score how suspicious the hosting provider is.
     Based on: known BP list, peer count, country, ASN name keywords.
+    Known-clean ASNs (Google, Cloudflare, etc.) are never flagged.
     """
     score       = 0
     indicators  = []
+
+    # Never flag known-clean providers — early return
+    if result.get("asn") in KNOWN_CLEAN_ASNS:
+        result["bp_score"]      = 0
+        result["bp_indicators"] = []
+        result["bp_label"]      = "MAINSTREAM HOSTING"
+        return
 
     # Known bulletproof ASN
     if result["asn"] in KNOWN_BULLETPROOF_ASNS:

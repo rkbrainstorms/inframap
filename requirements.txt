@@ -1,0 +1,8 @@
+# inframap has zero external dependencies.
+# All functionality uses Python standard library only:
+#   urllib, json, hashlib, re, socket, csv, io, collections, difflib, datetime
+#
+# Python 3.6+ required.
+#
+# Optional (not required, gracefully handled if missing):
+#   None currently — contributions welcome

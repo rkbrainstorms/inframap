@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "inframap"
+version = "1.2.0"
+description = "Open-source infrastructure fingerprinting & attribution engine for CTI analysts"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.6"
+keywords = [
+    "threat-intelligence", "cti", "osint", "cybersecurity",
+    "attribution", "infrastructure", "phishing", "certificate-transparency"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+[project.scripts]
+inframap = "inframap.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/rkbrainstorms/inframap"
+Repository = "https://github.com/rkbrainstorms/inframap"
+"Bug Tracker" = "https://github.com/rkbrainstorms/inframap/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["inframap*"]

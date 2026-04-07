@@ -114,6 +114,102 @@ def print_summary(report: dict, no_color: bool = False):
         print()
 
 
+def print_compare(result: dict, no_color: bool = False):
+    global _NO_COLOR
+    _NO_COLOR = no_color
+
+    domain_a = result.get("domain_a", "domain_a")
+    domain_b = result.get("domain_b", "domain_b")
+    score    = result.get("shared_score", 0)
+    label    = result.get("confidence_label", "")
+    verdict  = result.get("verdict", "")
+    indicators = result.get("shared_indicators", [])
+    differences= result.get("differences", [])
+
+    score_color = BGRN if score >= 60 else BYEL if score >= 40 else DIM
+
+    print()
+    print(_c(B + CYAN, "━" * 64))
+    print(_c(B + CYAN, "  INFRAMAP — SHARED OPERATOR COMPARISON"))
+    print(_c(B + CYAN, "━" * 64))
+    print()
+    print(f"  {'Domain A':<18} {_c(B, domain_a)}")
+    print(f"  {'Domain B':<18} {_c(B, domain_b)}")
+    print()
+
+    bar_filled = int(score / 2)
+    bar = "█" * bar_filled + "░" * (50 - bar_filled)
+    print(_c(score_color, f"  ┌─ SHARED OPERATOR SCORE {'─' * 35}┐"))
+    print(_c(score_color, f"  │  {label:<58}│"))
+    print(_c(score_color, f"  │  [{bar}] {score:>3}/100  │"))
+    print(_c(score_color, f"  └{'─' * 60}┘"))
+    print()
+    print(f"  {_c(DIM, verdict)}")
+    print()
+
+    if indicators:
+        print(_c(B, "  SHARED INDICATORS"))
+        print(_c(DIM, "  " + "─" * 62))
+        for ind in indicators:
+            print(f"  {_c(BGRN, '✓')} {ind}")
+        print()
+
+    if differences:
+        print(_c(B, "  DIFFERENCES"))
+        print(_c(DIM, "  " + "─" * 62))
+        for diff in differences:
+            print(f"  {_c(DIM, '✗')} {diff}")
+        print()
+
+    print(_c(DIM, "  " + "─" * 62))
+    print(_c(DIM, "  inframap | defang all IOCs before sharing | use responsibly"))
+    print()
+
+
+def print_phishing(result: dict, no_color: bool = False):
+    global _NO_COLOR
+    _NO_COLOR = no_color
+
+    score    = result.get("phishing_score", 0)
+    detected = result.get("kit_detected", False)
+    titles   = result.get("matched_titles", [])
+    patterns = result.get("matched_patterns", [])
+    aitm     = result.get("aitm_indicators", [])
+    scans    = result.get("suspicious_scans", [])
+
+    score_color = BRED if score >= 60 else BYEL if score >= 40 else DIM
+    status = _c(BRED, "KIT DETECTED") if detected else _c(DIM, "NO KIT DETECTED")
+
+    print()
+    print(_c(B, "  PHISHING KIT DETECTION"))
+    print(_c(DIM, "  " + "─" * 62))
+    print(f"  Score: {_c(score_color, f'{score}/100')}  Status: {status}")
+    print()
+
+    if aitm:
+        print(_c(BRED, "  [!] AiTM INDICATORS"))
+        for a in aitm:
+            print(f"      {a}")
+        print()
+
+    if titles:
+        print(_c(B, "  MATCHED PAGE TITLES"))
+        for t in titles[:5]:
+            print(f"  {_c(YELLOW, '→')} {t}")
+        print()
+
+    if scans:
+        print(_c(B, "  SUSPICIOUS SCANS"))
+        print(_c(DIM, "  " + "─" * 62))
+        print(f"  {'DATE':<12} {'COUNTRY':<8} {'ASN':<12} URL")
+        print(_c(DIM, "  " + "─" * 62))
+        for s in scans[:5]:
+            url = s.get("url", "")[:45]
+            print(f"  {s.get('date',''):<12} {s.get('country',''):<8} "
+                  f"{s.get('asn',''):<12} {url}")
+    print()
+
+
 def print_evidence_table(report: dict, no_color: bool = False):
     global _NO_COLOR
     _NO_COLOR = no_color
