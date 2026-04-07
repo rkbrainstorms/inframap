@@ -220,6 +220,7 @@ def build_confidence_report(
     # to avoid false positives on legitimate infrastructure
     if domain:
         domain_lower = domain.lower()
+        domain_stripped = domain_lower.lstrip("www.")
         for clean in KNOWN_CLEAN_DOMAINS:
             if domain_stripped == clean + '.com' or domain_stripped == clean + '.org' or domain_stripped == clean + '.net' or domain_stripped.endswith('.' + clean + '.com'):
                 score = min(score, 30)
