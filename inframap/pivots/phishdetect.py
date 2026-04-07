@@ -1,14 +1,17 @@
 """
-Phishing kit detection — urlscan.io page title + content analysis.
+Phishing kit detection — multi-signal scoring engine.
 No API key required for search (keyless quota applies).
 
-Detects phishing kits by querying urlscan.io for:
-- Suspicious page titles on newly registered domains
-- Microsoft/Google/bank login page impersonation
-- Credential harvesting patterns in page content
-- AiTM (Adversary-in-the-Middle) platform indicators
+Scores based on BOTH infrastructure signals AND urlscan page title analysis:
+- Domain age + cert fast-spin (infrastructure-level detection)
+- Brand keyword typosquatting in domain name
+- Bulletproof ASN hosting
+- Suspicious TLD
+- urlscan page title patterns (when available)
+- AiTM platform indicators
 
-This is a novel capability — no other free CLI tool does this.
+This hybrid approach catches phishing infrastructure even when
+urlscan hasn't scanned the page yet.
 """
 
 import urllib.request
@@ -20,68 +23,62 @@ import time
 
 
 URLSCAN_SEARCH = "https://urlscan.io/api/v1/search/"
-USER_AGENT     = "inframap/1.0 (github.com/rkbrainstorms/inframap; CTI research)"
+USER_AGENT     = "inframap/1.2 (github.com/rkbrainstorms/inframap; CTI research)"
 
 # Page titles commonly seen in phishing kits
 PHISHING_TITLE_PATTERNS = [
-    # Microsoft impersonation
-    r"microsoft.*sign.?in",
-    r"sign.?in.*microsoft",
-    r"office\s*365",
-    r"microsoft\s*365",
-    r"outlook.*login",
-    r"microsoft.*account",
-    r"verify.*microsoft",
-    r"microsoft.*verify",
-    r"teams.*login",
-    r"sharepoint.*login",
-
-    # Google impersonation
-    r"google.*sign.?in",
-    r"sign.?in.*google",
-    r"gmail.*login",
-    r"google.*account.*verify",
-
-    # Generic credential harvesting
-    r"account.*suspended",
-    r"verify.*account",
-    r"account.*verify",
-    r"confirm.*identity",
-    r"unusual.*sign.?in",
-    r"suspicious.*activity",
-    r"password.*expired",
-    r"account.*locked",
-    r"two.?factor.*auth",
-    r"security.*alert",
-    r"update.*payment",
-
-    # Banking
-    r"secure.*banking",
-    r"online.*banking.*login",
-    r"bank.*verify",
+    r"microsoft.*sign.?in", r"sign.?in.*microsoft",
+    r"office\s*365", r"microsoft\s*365",
+    r"outlook.*login", r"microsoft.*account",
+    r"verify.*microsoft", r"microsoft.*verify",
+    r"teams.*login", r"sharepoint.*login",
+    r"google.*sign.?in", r"sign.?in.*google",
+    r"gmail.*login", r"google.*account.*verify",
+    r"account.*suspended", r"verify.*account",
+    r"account.*verify", r"confirm.*identity",
+    r"unusual.*sign.?in", r"suspicious.*activity",
+    r"password.*expired", r"account.*locked",
+    r"two.?factor.*auth", r"security.*alert",
+    r"update.*payment", r"secure.*banking",
+    r"online.*banking.*login", r"bank.*verify",
 ]
 
-# ASNs commonly used in phishing infrastructure
-PHISHING_ASNS = {
-    "AS60068",   # Datacamp/CDN77
-    "AS206485",  # Deltahost
-    "AS48721",   # Flyservers
-    "AS202422",  # G-Core
-    "AS9009",    # M247
-    "AS59477",   # Serverius
-    "AS395082",  # HostRoyale
+# Brand keywords that attackers typosquat
+BRAND_KEYWORDS = [
+    "microsoft", "outlook", "office365", "office-365",
+    "onedrive", "sharepoint", "teams", "azure",
+    "google", "gmail", "workspace",
+    "apple", "icloud",
+    "login", "signin", "sign-in", "secure", "verify",
+    "account", "update", "portal", "mfa", "auth",
+    "password", "reset", "helpdesk", "support",
+]
+
+# Suspicious TLDs frequently used in phishing
+SUSPICIOUS_TLDS = {
+    ".co", ".site", ".xyz", ".online", ".click",
+    ".live", ".top", ".club", ".info", ".vip",
+    ".cc", ".pw", ".tk", ".ml", ".ga", ".cf",
+    ".work", ".shop", ".store", ".tech"
 }
 
-# Compiled patterns
+# Bulletproof ASNs
+PHISHING_ASNS = {
+    "AS60068", "AS206485", "AS48721", "AS202422",
+    "AS9009", "AS59477", "AS395082", "AS40034",
+    "AS43350",  # NForce — used by topdns.com
+}
+
 _COMPILED_PATTERNS = [re.compile(p, re.IGNORECASE) for p in PHISHING_TITLE_PATTERNS]
 
 
 def detect_phishing_kit(domain: str, api_key: str = None, timeout: int = 10,
                         domain_age_days: int = None, cert_fast_spin: bool = False,
-                        cert_count: int = 0) -> dict:
+                        cert_count: int = 0, asn: str = None,
+                        has_wildcard_san: bool = False) -> dict:
     """
-    Scan urlscan.io results for phishing kit indicators on a domain.
-    Returns scored findings with matched patterns.
+    Multi-signal phishing kit detection.
+    Scores based on infrastructure signals + urlscan page analysis.
     """
     result = {
         "domain":           domain,
@@ -91,44 +88,115 @@ def detect_phishing_kit(domain: str, api_key: str = None, timeout: int = 10,
         "matched_patterns": [],
         "suspicious_scans": [],
         "aitm_indicators":  [],
+        "infra_signals":    [],
         "findings":         [],
         "errors":           []
     }
 
-    # Search for scans of this domain
-    scans = _search_urlscan(domain, api_key, timeout)
-    if not scans:
-        return result
-
     score = 0
+    infra_signals = []
 
-    # Boost score from cert/domain signals passed in from main engine
+    # ── 1. Infrastructure signals (no urlscan needed) ──────────────
+
+    # Domain age
+    if domain_age_days is not None:
+        if domain_age_days < 7:
+            score += 30
+            infra_signals.append(f"very new domain ({domain_age_days}d old)")
+        elif domain_age_days < 30:
+            score += 20
+            infra_signals.append(f"newly registered ({domain_age_days}d old)")
+        elif domain_age_days < 90:
+            score += 10
+            infra_signals.append(f"recently registered ({domain_age_days}d old)")
+
+    # Cert fast-spin
     if cert_fast_spin:
         score += 25
-    if cert_count >= 10:
-        score += 15
-    elif cert_count >= 3:
-        score += 10
-    if domain_age_days is not None and domain_age_days < 30:
+        infra_signals.append("cert fast-spin detected (≥5 certs in one month)")
+
+    # High cert volume
+    if cert_count >= 20:
         score += 20
-    elif domain_age_days is not None and domain_age_days < 90:
+        infra_signals.append(f"very high cert volume ({cert_count} certs)")
+    elif cert_count >= 10:
+        score += 15
+        infra_signals.append(f"high cert volume ({cert_count} certs)")
+    elif cert_count >= 3:
+        score += 8
+        infra_signals.append(f"elevated cert volume ({cert_count} certs)")
+
+    # Wildcard SAN
+    if has_wildcard_san:
+        score += 15
+        infra_signals.append("wildcard SAN certificate")
+
+    # Bulletproof ASN
+    if asn and asn in PHISHING_ASNS:
+        score += 20
+        infra_signals.append(f"hosted on known phishing ASN: {asn}")
+
+    # ── 2. Domain name analysis ────────────────────────────────────
+
+    domain_lower = domain.lower()
+    base_domain  = domain_lower.split(".")[0]
+
+    # Brand keyword in domain
+    matched_brands = []
+    for brand in BRAND_KEYWORDS:
+        if brand in domain_lower and brand not in ["co", "info"]:
+            matched_brands.append(brand)
+
+    if len(matched_brands) >= 2:
+        score += 25
+        infra_signals.append(f"multiple brand keywords in domain: {', '.join(matched_brands[:3])}")
+    elif len(matched_brands) == 1:
+        score += 15
+        infra_signals.append(f"brand keyword in domain: {matched_brands[0]}")
+
+    # Suspicious TLD
+    for tld in SUSPICIOUS_TLDS:
+        if domain_lower.endswith(tld):
+            score += 10
+            infra_signals.append(f"suspicious TLD: {tld}")
+            break
+
+    # Hyphenated domain (common in phishing)
+    if base_domain.count("-") >= 2:
         score += 10
+        infra_signals.append(f"heavily hyphenated domain ({base_domain.count('-')} hyphens)")
+    elif base_domain.count("-") == 1:
+        score += 5
+
+    # Long domain (phishing domains tend to be descriptive)
+    if len(base_domain) > 20:
+        score += 8
+        infra_signals.append(f"long domain name ({len(base_domain)} chars)")
+
+    # Numbers in domain (random-looking)
+    digit_count = sum(c.isdigit() for c in base_domain)
+    if digit_count >= 4:
+        score += 8
+        infra_signals.append(f"many digits in domain ({digit_count})")
+
+    result["infra_signals"] = infra_signals
+
+    # ── 3. urlscan page title analysis ────────────────────────────
+
+    scans = _search_urlscan(domain, api_key, timeout)
     matched_titles  = set()
     matched_patterns= set()
     suspicious_scans= []
     aitm_indicators = []
 
     for scan in scans:
-        page    = scan.get("page", {})
-        task    = scan.get("task", {})
-        title   = (page.get("title") or "").strip()
-        url     = page.get("url", task.get("url", ""))
-        asn     = page.get("asn", "")
-        country = page.get("country", "")
-        status  = page.get("status", "")
-        server  = page.get("server", "")
+        page   = scan.get("page", {})
+        task   = scan.get("task", {})
+        title  = (page.get("title") or "").strip()
+        url    = page.get("url", task.get("url", ""))
+        asn_s  = page.get("asn", "")
+        country= page.get("country", "")
 
-        # Check title against phishing patterns
         if title:
             for i, pattern in enumerate(_COMPILED_PATTERNS):
                 if pattern.search(title):
@@ -139,28 +207,22 @@ def detect_phishing_kit(domain: str, api_key: str = None, timeout: int = 10,
                         "url":     url,
                         "title":   title,
                         "country": country,
-                        "asn":     asn,
+                        "asn":     asn_s,
                         "date":    task.get("time", "")[:10]
                     })
                     break
 
-        # AiTM platform indicators
-        aitm_patterns = ["evilginx", "modlishka", "muraena", "necrobrowser",
-                         "aitm", "adversary-in-the-middle", "reverse proxy"]
+        # AiTM indicators
+        aitm_patterns = ["evilginx", "modlishka", "muraena",
+                         "necrobrowser", "aitm", "reverse proxy"]
         for ap in aitm_patterns:
-            if ap in url.lower() or ap in (server or "").lower():
-                aitm_indicators.append(f"AiTM pattern '{ap}' in {url}")
+            if ap in url.lower():
+                aitm_indicators.append(f"AiTM pattern '{ap}' in URL")
                 score += 30
 
-        # Suspicious ASN
-        if asn in PHISHING_ASNS:
-            score += 15
-
-        # HTTP 200 on a login-looking URL from a bulletproof ASN
-        if status == "200" and asn in PHISHING_ASNS:
+        if asn_s in PHISHING_ASNS:
             score += 10
 
-    # Cap score at 100
     score = min(score, 100)
 
     result["phishing_score"]    = score
@@ -171,22 +233,23 @@ def detect_phishing_kit(domain: str, api_key: str = None, timeout: int = 10,
     result["aitm_indicators"]   = aitm_indicators
 
     # Build findings
+    if infra_signals:
+        conf = "CONFIRMED" if score >= 60 else "ANALYST ASSESSMENT" if score >= 40 else "CIRCUMSTANTIAL"
+        result["findings"].append({
+            "text":       f"phishing infrastructure score {score}/100 — {len(infra_signals)} signal(s)",
+            "confidence": conf,
+            "source":     "phishing-detection"
+        })
     if matched_titles:
         result["findings"].append({
-            "text":       f"{len(matched_titles)} scan(s) show phishing page titles",
-            "confidence": "CONFIRMED" if score >= 60 else "ANALYST ASSESSMENT",
+            "text":       f"{len(matched_titles)} phishing page title(s) detected on urlscan",
+            "confidence": "CONFIRMED",
             "source":     "phishing-detection"
         })
     if aitm_indicators:
         result["findings"].append({
-            "text":       f"AiTM platform indicator detected",
+            "text":       "AiTM platform indicator detected",
             "confidence": "CONFIRMED",
-            "source":     "phishing-detection"
-        })
-    if score >= 40 and not matched_titles:
-        result["findings"].append({
-            "text":       f"phishing kit score {score}/100 — infrastructure pattern match",
-            "confidence": "ANALYST ASSESSMENT",
             "source":     "phishing-detection"
         })
 
@@ -194,22 +257,16 @@ def detect_phishing_kit(domain: str, api_key: str = None, timeout: int = 10,
 
 
 def _search_urlscan(domain: str, api_key: str, timeout: int) -> list:
-    """Search urlscan for recent scans of a domain."""
     query   = f'page.domain:"{domain}"'
     params  = urllib.parse.urlencode({"q": query, "size": 100})
     url     = f"{URLSCAN_SEARCH}?{params}"
     headers = {"User-Agent": USER_AGENT}
     if api_key:
         headers["API-Key"] = api_key
-
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data.get("results", [])
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            return []
-        return []
     except Exception:
         return []

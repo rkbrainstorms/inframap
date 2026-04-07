@@ -25,13 +25,14 @@ from inframap.pivots.abuseip     import pivot_abuseip
 from inframap.pivots.bgphe       import pivot_bgphe
 from inframap.pivots.passivedns  import pivot_passivedns
 from inframap.pivots.phishdetect import detect_phishing_kit
+from inframap.pivots.hunt        import hunt_infrastructure
 from inframap.engine.cluster     import cluster_certs, cluster_whois, score_asn
 from inframap.engine.confidence  import build_confidence_report
 from inframap.engine.compare     import compare_domains
-from inframap.output.table       import print_evidence_table, print_summary, print_compare, print_phishing
+from inframap.output.table       import print_evidence_table, print_summary, print_compare, print_phishing, print_hunt
 from inframap.output.export      import export_csv, export_json, export_markdown
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 BANNER = r"""
   _        __                          
@@ -82,6 +83,16 @@ api keys (all optional, all free):
                        help="compare two domains for shared operator (outputs shared-operator score)")
     modes.add_argument("--phishing", action="store_true",
                        help="run phishing kit detection on the seed domain")
+    modes.add_argument("--hunt", action="store_true",
+                       help="proactive hunting mode — find newly registered suspicious domains")
+    modes.add_argument("--asn",       metavar="ASN",
+                       help="ASN to hunt (use with --hunt, e.g. AS43350)")
+    modes.add_argument("--nameserver", metavar="NS",
+                       help="nameserver to hunt (use with --hunt, e.g. topdns.com)")
+    modes.add_argument("--keyword",   metavar="KEYWORD",
+                       help="keyword to hunt in domain names (use with --hunt)")
+    modes.add_argument("--days",      type=int, default=30,
+                       help="look back N days for --hunt mode (default: 30)")
 
     keys = p.add_argument_group("api keys (optional, all free-tier)")
     keys.add_argument("--urlscan-key",  metavar="KEY", default=os.environ.get("URLSCAN_API_KEY"),
@@ -112,10 +123,16 @@ api keys (all optional, all free):
 
 def validate_args(args):
     if args.compare:
-        return  # --compare provides its own seeds
+        return
+    if args.hunt:
+        if not any([args.asn, args.nameserver, args.keyword]):
+            print("[!] --hunt requires one of: --asn ASN | --nameserver NS | --keyword WORD")
+            sys.exit(1)
+        return
     if not any([args.domain, args.ip, args.email, args.cert]):
         print("[!] provide at least one seed: -d DOMAIN | -i IP | -e EMAIL | -c CERT_HASH")
         print("[!] or use --compare DOMAIN_A DOMAIN_B for shared-operator analysis")
+        print("[!] or use --hunt --asn AS43350 for proactive hunting")
         sys.exit(1)
 
 
@@ -237,6 +254,27 @@ def main():
     if not args.quiet:
         print(BANNER)
 
+    # ── HUNT MODE ────────────────────────────────────────────────────
+    if args.hunt:
+        if not args.quiet:
+            print(f"[*] mode      : proactive threat hunting")
+            if args.asn:        print(f"[*] asn       : {args.asn}")
+            if args.nameserver: print(f"[*] nameserver: {args.nameserver}")
+            if args.keyword:    print(f"[*] keyword   : {args.keyword}")
+            print(f"[*] days      : {args.days}")
+            print()
+
+        _progress("crt.sh certificate hunt", args.quiet)
+        hunt_result = hunt_infrastructure(
+            asn=args.asn,
+            nameserver=args.nameserver,
+            keyword=args.keyword,
+            days=args.days,
+            timeout=args.timeout
+        )
+        print_hunt(hunt_result, no_color=args.no_color)
+        return
+
     # ── COMPARE MODE ─────────────────────────────────────────────────
     if args.compare:
         domain_a, domain_b = args.compare
@@ -252,6 +290,8 @@ def main():
         crtsh_a = pivot_crtsh(domain_a, args.timeout)
         _progress(f"passive DNS → {domain_a}", args.quiet)
         pdns_a = pivot_passivedns(domain=domain_a, timeout=args.timeout)
+        _progress(f"urlscan.io → {domain_a}", args.quiet)
+        urlscan_a = pivot_urlscan(domain=domain_a, api_key=args.urlscan_key, timeout=args.timeout)
         time.sleep(0.5)
 
         _progress(f"RDAP → {domain_b}", args.quiet)
@@ -260,6 +300,8 @@ def main():
         crtsh_b = pivot_crtsh(domain_b, args.timeout)
         _progress(f"passive DNS → {domain_b}", args.quiet)
         pdns_b = pivot_passivedns(domain=domain_b, timeout=args.timeout)
+        _progress(f"urlscan.io → {domain_b}", args.quiet)
+        urlscan_b = pivot_urlscan(domain=domain_b, api_key=args.urlscan_key, timeout=args.timeout)
 
         if not args.quiet:
             print("\n[*] running comparison engine...\n")
@@ -267,7 +309,8 @@ def main():
         result = compare_domains(
             rdap_a=rdap_a, rdap_b=rdap_b,
             crtsh_a=crtsh_a, crtsh_b=crtsh_b,
-            passivedns_a=pdns_a, passivedns_b=pdns_b
+            passivedns_a=pdns_a, passivedns_b=pdns_b,
+            urlscan_a=urlscan_a, urlscan_b=urlscan_b
         )
         print_compare(result, no_color=args.no_color)
         return
@@ -308,10 +351,19 @@ def main():
     # Phishing kit detection (opt-in with --phishing flag)
     if args.phishing and "phishdetect" not in skip and args.domain:
         _progress("phishing kit detection", args.quiet)
+        # Pass cert and domain signals for infrastructure-level scoring
+        crtsh_data   = pivot_results.get("crtsh", {})
+        rdap_data    = pivot_results.get("rdap", {})
+        bgphe_data   = pivot_results.get("bgphe", {})
         pivot_results["phishdetect"] = detect_phishing_kit(
             domain=args.domain,
             api_key=args.urlscan_key,
-            timeout=args.timeout
+            timeout=args.timeout,
+            domain_age_days=rdap_data.get("domain_age_days"),
+            cert_fast_spin=any(c.get("suspicious") for c in crtsh_data.get("timing_clusters", [])),
+            cert_count=crtsh_data.get("cert_count", 0),
+            asn=bgphe_data.get("asn"),
+            has_wildcard_san=len([n for n in crtsh_data.get("unique_names", []) if n.startswith("*.")]) > 0
         )
 
     # depth-2 pivots (optional)

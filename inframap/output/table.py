@@ -276,3 +276,63 @@ def print_evidence_table(report: dict, no_color: bool = False):
     print(_c(DIM, "  " + "─" * 62))
     print(_c(DIM, "  inframap | defang all IOCs before sharing | use responsibly"))
     print()
+
+def print_hunt(result: dict, no_color: bool = False):
+    global _NO_COLOR
+    _NO_COLOR = no_color
+
+    hunt_type   = result.get("hunt_type", "")
+    hunt_target = result.get("hunt_target", "")
+    days        = result.get("days", 30)
+    found       = result.get("domains_found", 0)
+    suspicious  = result.get("suspicious", [])
+    errors      = result.get("errors", [])
+
+    print()
+    print(_c(B + CYAN, "━" * 64))
+    print(_c(B + CYAN, "  INFRAMAP — PROACTIVE THREAT HUNT"))
+    print(_c(B + CYAN, "━" * 64))
+    print()
+    print(f"  {'Hunt type':<18} {hunt_type}")
+    print(f"  {'Target':<18} {_c(B, hunt_target)}")
+    print(f"  {'Lookback':<18} {days} days")
+    print(f"  {'Suspicious found':<18} {_c(BRED if found > 0 else DIM, str(found))}")
+    print()
+
+    if errors:
+        for err in errors:
+            if not err.startswith("Note:"):
+                print(f"  {_c(YELLOW, '[!]')} {err}")
+        print()
+
+    if not suspicious:
+        print(_c(DIM, "  No suspicious domains found in this time window."))
+        print(_c(DIM, "  Try --days 60 or a different --keyword/--asn/--nameserver"))
+        print()
+        return
+
+    print(_c(B, "  SUSPICIOUS DOMAINS (ranked by score)"))
+    print(_c(DIM, "  " + "─" * 62))
+    print(f"  {'SCORE':<8} {'AGE':<8} {'DATE':<12} {'DOMAIN':<30} SIGNALS")
+    print(_c(DIM, "  " + "─" * 62))
+
+    for d in suspicious[:25]:
+        score   = d.get("score", 0)
+        age     = f"{d.get('age_days', '?')}d" if d.get('age_days') is not None else "?"
+        date    = d.get("cert_date", "")
+        domain  = d.get("domain", "")[:28]
+        signals = ", ".join(d.get("signals", []))[:40]
+
+        sc = BRED if score >= 60 else BYEL if score >= 40 else DIM
+        defanged = domain.replace(".", "[.]")
+
+        print(f"  {_c(sc, f'{score:>3}/100'):<17} {age:<8} {date:<12} {defanged:<30} {_c(DIM, signals)}")
+
+    if len(result.get("all_domains", [])) > 25:
+        remaining = len(result["all_domains"]) - 25
+        print(_c(DIM, f"\n  ... {remaining} more domains not shown. Use -o json for full list."))
+
+    print()
+    print(_c(DIM, "  " + "─" * 62))
+    print(_c(DIM, "  inframap | defang all IOCs before sharing | use responsibly"))
+    print()
