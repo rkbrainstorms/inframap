@@ -27,6 +27,8 @@ from inframap.engine.confidence import build_confidence_report
 from inframap.output.table   import print_evidence_table, print_summary
 from inframap.output.export  import export_csv, export_json, export_markdown
 
+VERSION = "1.1.0"
+
 BANNER = r"""
   _        __                          
  (_)_ __  / _|_ __ __ _ _ __ ___   __ _ _ __  
@@ -59,6 +61,8 @@ api keys (all optional, all free):
   BGP.he.net  : no key needed
         """
     )
+
+    p.add_argument("--version", action="version", version=f"inframap {VERSION}")
 
     seed = p.add_argument_group("seed (provide at least one)")
     seed.add_argument("-d", "--domain",  metavar="DOMAIN", help="seed domain (e.g. evil.com)")
@@ -119,15 +123,46 @@ def run_pivots(args, skip):
             api_key=args.urlscan_key, timeout=args.timeout
         )
 
-    if "abuseip" not in skip and seed_ip:
-        _progress("AbuseIPDB", args.quiet)
-        results["abuseip"] = pivot_abuseip(
-            seed_ip, api_key=args.abuseip_key, timeout=args.timeout
-        )
+    # Auto-pivot: feed top discovered IPs from urlscan into AbuseIPDB + BGP
+    # even at depth-1 — this is the key fix so BGP/AbuseIPDB always run
+    discovered_ips = []
+    if results.get("urlscan"):
+        discovered_ips = list(results["urlscan"].get("ips_seen", []))[:3]
 
-    if "bgphe" not in skip and seed_ip:
-        _progress("BGP.he.net", args.quiet)
-        results["bgphe"] = pivot_bgphe(seed_ip, timeout=args.timeout)
+    # Use seed IP first, then discovered IPs
+    ips_to_check = []
+    if seed_ip:
+        ips_to_check.append(seed_ip)
+    ips_to_check.extend([ip for ip in discovered_ips if ip != seed_ip])
+    ips_to_check = ips_to_check[:3]  # cap at 3 to respect rate limits
+
+    if ips_to_check:
+        if "abuseip" not in skip and args.abuseip_key:
+            _progress(f"AbuseIPDB ({len(ips_to_check)} IPs)", args.quiet)
+            results["abuseip"] = pivot_abuseip(
+                ips_to_check[0], api_key=args.abuseip_key, timeout=args.timeout
+            )
+            # Store additional IP results
+            results["abuseip_extra"] = []
+            for extra_ip in ips_to_check[1:]:
+                time.sleep(0.5)
+                results["abuseip_extra"].append(
+                    pivot_abuseip(extra_ip, api_key=args.abuseip_key, timeout=args.timeout)
+                )
+        elif "abuseip" not in skip and not args.abuseip_key:
+            if not args.quiet:
+                print(f"  [~] AbuseIPDB skipped — no API key (free at abuseipdb.com)")
+
+        if "bgphe" not in skip:
+            _progress(f"BGP.he.net ({len(ips_to_check)} IPs)", args.quiet)
+            results["bgphe"] = pivot_bgphe(ips_to_check[0], timeout=args.timeout)
+            results["bgphe_extra"] = []
+            for extra_ip in ips_to_check[1:]:
+                time.sleep(0.3)
+                results["bgphe_extra"].append(pivot_bgphe(extra_ip, args.timeout))
+    elif "abuseip" not in skip and not seed_ip:
+        if not args.quiet:
+            print(f"  [~] AbuseIPDB/BGP skipped — no IP discovered yet")
 
     return results
 
