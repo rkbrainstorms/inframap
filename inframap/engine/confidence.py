@@ -212,7 +212,7 @@ def build_confidence_report(
                 score += CONFIDENCE_WEIGHTS["asn_high_risk"]
             report["findings"].append(_finding(finding, conf, " / ".join(sources_used) or "BGP.he.net"))
 
-        if asn_score.get("abuse_score", 0) >= 80:
+        if (asn_score.get("abuse_score") or 0) >= 80:
             score += CONFIDENCE_WEIGHTS["abuseip_high"]
 
     # ── Legitimacy dampening ────────────────────────────────────────
