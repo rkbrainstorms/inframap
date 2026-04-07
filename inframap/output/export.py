@@ -1,0 +1,151 @@
+"""
+Export formatters — CSV, JSON, and Markdown output.
+
+Markdown output is formatted as a paste-ready CTI evidence table
+suitable for inclusion directly in investigation reports.
+"""
+
+import csv
+import json
+import io
+
+
+def export_csv(report: dict) -> str:
+    """Export IOC list as CSV — compatible with MISP, ThreatFox, etc."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+
+    writer.writerow([
+        "ioc_type", "value", "defanged", "source",
+        "seed_domain", "seed_ip", "confidence_tier", "generated"
+    ])
+
+    meta   = report.get("meta", {})
+    attr   = report.get("attribution", {})
+    domain = meta.get("seed_domain", "")
+    ip     = meta.get("seed_ip", "")
+    tier   = attr.get("tier_label", "")
+    gen    = meta.get("generated", "")[:19]
+
+    for ioc in report.get("iocs", []):
+        writer.writerow([
+            ioc.get("type", ""),
+            ioc.get("value", ""),
+            ioc.get("defanged", ""),
+            ioc.get("source", ""),
+            domain, ip, tier, gen
+        ])
+
+    return buf.getvalue()
+
+
+def export_json(report: dict) -> str:
+    """Export full report as JSON (pretty-printed)."""
+    # Remove raw data to keep output clean unless needed
+    clean = {k: v for k, v in report.items() if k != "raw"}
+    return json.dumps(clean, indent=2, default=str)
+
+
+def export_markdown(report: dict) -> str:
+    """
+    Export as a Markdown report — paste-ready for investigation notes,
+    GitHub wiki, or Confluence.
+    """
+    meta   = report.get("meta", {})
+    attr   = report.get("attribution", {})
+    infra  = report.get("infrastructure", {})
+    finds  = report.get("findings", [])
+    iocs   = report.get("iocs", [])
+    errors = report.get("errors", [])
+
+    seed_domain = meta.get("seed_domain", "N/A")
+    seed_ip     = meta.get("seed_ip", "N/A")
+    tier_label  = attr.get("tier_label", "INSUFFICIENT DATA")
+    score       = attr.get("confidence_score", 0)
+    summary     = attr.get("summary", "")
+    generated   = meta.get("generated", "")[:19].replace("T", " ")
+    sources     = ", ".join(meta.get("sources_used", []))
+
+    lines = []
+    lines.append("# inframap — Infrastructure Attribution Report")
+    lines.append("")
+    lines.append(f"**Generated:** {generated} UTC  ")
+    lines.append(f"**Seed domain:** `{seed_domain}`  ")
+    if seed_ip and seed_ip != "N/A":
+        lines.append(f"**Seed IP:** `{seed_ip}`  ")
+    lines.append(f"**Sources:** {sources}  ")
+    lines.append(f"**Tool:** inframap v1.0")
+    lines.append("")
+
+    # Attribution block
+    lines.append("---")
+    lines.append("")
+    lines.append("## Attribution Confidence")
+    lines.append("")
+    lines.append(f"| Field | Value |")
+    lines.append(f"|-------|-------|")
+    lines.append(f"| Confidence tier | **{tier_label}** |")
+    lines.append(f"| Score | {score}/100 |")
+    lines.append(f"| Summary | {summary} |")
+    lines.append("")
+
+    # Infrastructure summary
+    if infra:
+        lines.append("## Infrastructure Summary")
+        lines.append("")
+        lines.append("| Field | Value |")
+        lines.append("|-------|-------|")
+        for k, v in infra.items():
+            if v is not None and v != [] and v != {}:
+                key_fmt = k.replace("_", " ").title()
+                val_fmt = ", ".join(v) if isinstance(v, list) else str(v)
+                lines.append(f"| {key_fmt} | {val_fmt} |")
+        lines.append("")
+
+    # Findings
+    if finds:
+        lines.append("## Findings")
+        lines.append("")
+        lines.append("| Confidence | Source | Finding |")
+        lines.append("|------------|--------|---------|")
+        for f in finds:
+            conf   = f.get("confidence", "")
+            source = f.get("source", "")
+            text   = f.get("text", "").replace("|", "\\|")
+            lines.append(f"| {conf} | {source} | {text} |")
+        lines.append("")
+
+    # IOC table
+    if iocs:
+        lines.append("## Defanged IOCs")
+        lines.append("")
+        lines.append("> All values defanged. Re-fang before operationalising.")
+        lines.append("")
+        lines.append("| Type | Defanged Value | Source |")
+        lines.append("|------|----------------|--------|")
+
+        type_order = ["domain", "ip", "email", "nameserver", "registrant_org", "asn"]
+        ordered    = sorted(iocs, key=lambda x: (
+            type_order.index(x["type"]) if x["type"] in type_order else 99
+        ))
+
+        for ioc in ordered:
+            t        = ioc.get("type", "")
+            defanged = ioc.get("defanged", ioc.get("value", ""))
+            source   = ioc.get("source", "")
+            lines.append(f"| {t} | `{defanged}` | {source} |")
+        lines.append("")
+
+    # Errors/warnings
+    if errors:
+        lines.append("## Warnings")
+        lines.append("")
+        for err in errors:
+            lines.append(f"- **{err.get('source', '?')}**: {err.get('error', '')}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("*Generated by [inframap](https://github.com/rhishav/inframap) — "
+                 "open-source infrastructure fingerprinting for the CTI community*")
+
+    return "\n".join(lines)
