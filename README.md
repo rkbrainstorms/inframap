@@ -17,6 +17,8 @@ Built for the security research community. No paywalls. No subscriptions. Just a
   free & open source | no enterprise APIs required
 ```
 
+![inframap demo](demo.gif)
+
 ---
 
 ## The problem it solves
