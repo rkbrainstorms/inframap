@@ -221,7 +221,7 @@ def build_confidence_report(
     if domain:
         domain_lower = domain.lower()
         for clean in KNOWN_CLEAN_DOMAINS:
-            if clean in domain_lower:
+            if domain_stripped == clean + '.com' or domain_stripped == clean + '.org' or domain_stripped == clean + '.net' or domain_stripped.endswith('.' + clean + '.com'):
                 score = min(score, 30)
                 report["findings"].append(_finding(
                     f"seed domain matches known-clean brand '{clean}' — confidence capped",
