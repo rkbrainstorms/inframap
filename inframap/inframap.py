@@ -5,7 +5,6 @@ inframap — Infrastructure fingerprinting & attribution engine for CTI analysts
 Tier 0: Runs with zero keys (crt.sh, RDAP, BGP.he.net, HackerTarget,
          Shodan InternetDB, Mnemonic PDNS, CertSpotter, Google CT)
 Tier 1: Better results with free account keys (urlscan.io, AbuseIPDB,
-         ThreatFox, URLhaus, GreyNoise)
 Tier 2: Premium features with paid keys (Shodan full, VirusTotal)
 
 Key management:
@@ -34,9 +33,7 @@ from inframap.pivots.hunt        import hunt_infrastructure
 from inframap.pivots.internetdb  import pivot_internetdb
 from inframap.pivots.threatmatch import bulk_check_iocs
 from inframap.pivots.liveness    import check_liveness, summarise_liveness
-from inframap.pivots.greynoise   import pivot_greynoise, bulk_greynoise
 from inframap.pivots.virustotal  import pivot_virustotal_domain, pivot_virustotal_ip
-from inframap.pivots.greynoise   import pivot_greynoise, bulk_greynoise
 from inframap.pivots.virustotal  import pivot_virustotal_domain, pivot_virustotal_ip
 from inframap.engine.cluster     import cluster_certs, cluster_whois, score_asn
 from inframap.engine.confidence  import build_confidence_report
@@ -82,7 +79,6 @@ examples:
 
 tiers:
   tier 0 — no key: crt.sh, RDAP, BGP.he.net, InternetDB, HackerTarget
-  tier 1 — free:   urlscan.io, AbuseIPDB, ThreatFox, URLhaus, GreyNoise
   tier 2 — paid:   Shodan full, VirusTotal, SecurityTrails
         """
     )
@@ -111,7 +107,7 @@ tiers:
     keys_cmd.add_argument("keys", nargs="?", choices=["set", "list", "remove", "status"],
                           help="manage API keys: set NAME VALUE | list | remove NAME")
     keys_cmd.add_argument("key_name",  nargs="?", metavar="NAME",
-                          help="key name (urlscan, abuseip, threatfox, urlhaus, greynoise, shodan, virustotal)")
+                          help="key name (urlscan, abuseip, threatfox, urlhaus, shodan, virustotal)")
     keys_cmd.add_argument("key_value", nargs="?", metavar="VALUE",
                           help="key value (only for 'keys set')")
 
@@ -141,7 +137,7 @@ def handle_keys_command(args):
     if cmd == "set":
         if not args.key_name or not args.key_value:
             print("[!] usage: inframap keys set NAME VALUE")
-            print("[!] names: urlscan, abuseip, threatfox, urlhaus, greynoise, shodan, virustotal")
+            print("[!] names: urlscan, abuseip, threatfox, urlhaus, shodan, virustotal")
             return True
         try:
             from inframap.validate import sanitize_api_key
@@ -222,7 +218,6 @@ def run_pivots(args, skip, keys):
 
     if ips_to_check:
         abuseip_key  = keys.get("abuseip")
-        greynoise_key = keys.get("greynoise")
 
         if "abuseip" not in skip:
             if abuseip_key:
@@ -243,13 +238,7 @@ def run_pivots(args, skip, keys):
                 time.sleep(0.3)
                 results["bgphe_extra"].append(pivot_bgphe(ip, args.timeout))
 
-        # GreyNoise — runs keyless via community endpoint, better with free key
-        if "greynoise" not in skip:
-            gn_mode = "with key" if greynoise_key else "community (keyless)"
-            _progress(f"GreyNoise ({gn_mode}, {len(ips_to_check)} IPs)", args.quiet)
-            results["greynoise"] = {}
             for ip in ips_to_check:
-                results["greynoise"][ip] = pivot_greynoise(ip, api_key=greynoise_key, timeout=args.timeout)
                 time.sleep(0.3)
     elif "bgphe" not in skip and not seed_ip:
         if not args.quiet:
@@ -394,7 +383,7 @@ def main():
         if args.threatcheck:    all_sources.append('threatfox/urlhaus')
 
         # Count configured keys (masked)
-        configured = [k for k in ["urlscan","abuseip","threatfox","urlhaus","greynoise"] if keys.get(k)]
+        configured = [k for k in ["urlscan","abuseip","threatfox","urlhaus"] if keys.get(k)]
         key_str    = f"{len(configured)} key(s) loaded" if configured else "keyless mode (tier 0)"
 
         print(f"[*] seed      : {seed_str}")
@@ -441,17 +430,6 @@ def main():
             internetdb_results[ip] = pivot_internetdb(ip, timeout=args.timeout)
             time.sleep(0.2)
         pivot_results["internetdb"] = internetdb_results
-
-    # GreyNoise (tier 1 — free key, 100/day)
-    greynoise_key = keys.get("greynoise")
-    if all_ips and "greynoise" not in skip:
-        if greynoise_key:
-            _progress(f"GreyNoise ({len(all_ips[:5])} IPs)", args.quiet)
-            pivot_results["greynoise"] = bulk_greynoise(
-                all_ips[:5], api_key=greynoise_key, timeout=args.timeout
-            )
-        else:
-            _progress_skip("GreyNoise", "greynoise", args.quiet)
 
     # VirusTotal (tier 1 — free key, 4/min)
     vt_key = keys.get("virustotal")
@@ -579,10 +557,8 @@ def main():
 
         report["infrastructure"]["internetdb"] = internetdb_results
 
-    # Add GreyNoise findings
-    gn_results = pivot_results.get("greynoise", {})
+    gn_results = pivot_results.get( {})
     if gn_results:
-        report["meta"]["sources_used"].append("GreyNoise")
         for ip, gn in gn_results.items():
             if gn.get("errors"):
                 continue
@@ -594,19 +570,15 @@ def main():
                 report["findings"].append({
                     "text": f"{ip} is known benign infrastructure ({gn.get('name', 'RIOT')}) — deprioritise",
                     "confidence": "CONFIRMED",
-                    "source": "GreyNoise"
                 })
             elif noise and classification == "benign":
                 report["findings"].append({
                     "text": f"{ip} is internet background noise (scanner) — likely not threat actor",
                     "confidence": "CONFIRMED",
-                    "source": "GreyNoise"
                 })
             elif classification == "malicious":
                 report["findings"].append({
-                    "text": f"{ip} classified MALICIOUS by GreyNoise — confirmed threat activity",
                     "confidence": "CONFIRMED",
-                    "source": "GreyNoise"
                 })
                 # Boost confidence score for confirmed malicious
                 report["attribution"]["confidence_score"] = min(

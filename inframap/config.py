@@ -136,15 +136,6 @@ SOURCES = {
         "free_limit": "Unlimited (free account)",
         "env_var":  "URLHAUS_API_KEY",
     },
-    "greynoise": {
-        "name":     "GreyNoise",
-        "tier":     1,
-        "key_name": "greynoise",
-        "desc":     "IP noise vs targeted classification",
-        "signup":   "https://viz.greynoise.io/signup",
-        "free_limit": "100 IPs/day",
-        "env_var":  "GREYNOISE_API_KEY",
-    },
 
     # ── Tier 2: Premium (optional, paid) ──────────────────────────
     "shodan": {
@@ -321,8 +312,7 @@ def get_all_keys() -> dict:
         "abuseip":        get_key("abuseip"),
         "threatfox":      get_key("threatfox"),
         "urlhaus":        get_key("urlhaus"),
-        "greynoise":      get_key("greynoise"),
-        "shodan":         get_key("shodan"),
+                "shodan":         get_key("shodan"),
         "virustotal":     get_key("virustotal"),
         "securitytrails": get_key("securitytrails"),
     }
