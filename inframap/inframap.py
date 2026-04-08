@@ -34,6 +34,10 @@ from inframap.pivots.hunt        import hunt_infrastructure
 from inframap.pivots.internetdb  import pivot_internetdb
 from inframap.pivots.threatmatch import bulk_check_iocs
 from inframap.pivots.liveness    import check_liveness, summarise_liveness
+from inframap.pivots.greynoise   import pivot_greynoise, bulk_greynoise
+from inframap.pivots.virustotal  import pivot_virustotal_domain, pivot_virustotal_ip
+from inframap.pivots.greynoise   import pivot_greynoise, bulk_greynoise
+from inframap.pivots.virustotal  import pivot_virustotal_domain, pivot_virustotal_ip
 from inframap.engine.cluster     import cluster_certs, cluster_whois, score_asn
 from inframap.engine.confidence  import build_confidence_report
 from inframap.engine.compare     import compare_domains
@@ -217,7 +221,9 @@ def run_pivots(args, skip, keys):
     ips_to_check   = list(set(([seed_ip] if seed_ip else []) + discovered_ips))[:3]
 
     if ips_to_check:
-        abuseip_key = keys.get("abuseip")
+        abuseip_key  = keys.get("abuseip")
+        greynoise_key = keys.get("greynoise")
+
         if "abuseip" not in skip:
             if abuseip_key:
                 _progress(f"AbuseIPDB ({len(ips_to_check)} IPs)", args.quiet)
@@ -236,6 +242,15 @@ def run_pivots(args, skip, keys):
             for ip in ips_to_check[1:]:
                 time.sleep(0.3)
                 results["bgphe_extra"].append(pivot_bgphe(ip, args.timeout))
+
+        # GreyNoise — runs keyless via community endpoint, better with free key
+        if "greynoise" not in skip:
+            gn_mode = "with key" if greynoise_key else "community (keyless)"
+            _progress(f"GreyNoise ({gn_mode}, {len(ips_to_check)} IPs)", args.quiet)
+            results["greynoise"] = {}
+            for ip in ips_to_check:
+                results["greynoise"][ip] = pivot_greynoise(ip, api_key=greynoise_key, timeout=args.timeout)
+                time.sleep(0.3)
     elif "bgphe" not in skip and not seed_ip:
         if not args.quiet:
             print(f"  [~] BGP/AbuseIPDB skipped — no IP discovered yet")
@@ -292,9 +307,6 @@ def run_depth2(args, skip, keys, pivot_results, quiet):
 
 
 def main():
-    # Handle "inframap keys ..." before argparse
-    if len(sys.argv) > 1 and sys.argv[1] == "keys":
-        sys.argv.pop(1)
     args = parse_args()
 
     # Handle key management commands first
@@ -430,6 +442,34 @@ def main():
             time.sleep(0.2)
         pivot_results["internetdb"] = internetdb_results
 
+    # GreyNoise (tier 1 — free key, 100/day)
+    greynoise_key = keys.get("greynoise")
+    if all_ips and "greynoise" not in skip:
+        if greynoise_key:
+            _progress(f"GreyNoise ({len(all_ips[:5])} IPs)", args.quiet)
+            pivot_results["greynoise"] = bulk_greynoise(
+                all_ips[:5], api_key=greynoise_key, timeout=args.timeout
+            )
+        else:
+            _progress_skip("GreyNoise", "greynoise", args.quiet)
+
+    # VirusTotal (tier 1 — free key, 4/min)
+    vt_key = keys.get("virustotal")
+    if "virustotal" not in skip:
+        if vt_key and args.domain:
+            _progress("VirusTotal domain lookup", args.quiet)
+            pivot_results["virustotal"] = pivot_virustotal_domain(
+                args.domain, api_key=vt_key, timeout=args.timeout
+            )
+            if all_ips:
+                time.sleep(15)  # VT free tier: 4/min = 15s between calls
+                _progress(f"VirusTotal IP lookup", args.quiet)
+                pivot_results["virustotal_ip"] = pivot_virustotal_ip(
+                    all_ips[0], api_key=vt_key, timeout=args.timeout
+                )
+        elif not vt_key:
+            _progress_skip("VirusTotal", "virustotal", args.quiet)
+
     # ThreatFox + URLhaus (tier 1 — needs free key)
     if args.threatcheck:
         tf_key = keys.get("threatfox")
@@ -539,7 +579,71 @@ def main():
 
         report["infrastructure"]["internetdb"] = internetdb_results
 
-    # Add ThreatFox/URLhaus findings
+    # Add GreyNoise findings
+    gn_results = pivot_results.get("greynoise", {})
+    if gn_results:
+        report["meta"]["sources_used"].append("GreyNoise")
+        for ip, gn in gn_results.items():
+            if gn.get("errors"):
+                continue
+            classification = gn.get("classification", "unknown")
+            noise = gn.get("noise", False)
+            riot  = gn.get("riot", False)
+
+            if riot:
+                report["findings"].append({
+                    "text": f"{ip} is known benign infrastructure ({gn.get('name', 'RIOT')}) — deprioritise",
+                    "confidence": "CONFIRMED",
+                    "source": "GreyNoise"
+                })
+            elif noise and classification == "benign":
+                report["findings"].append({
+                    "text": f"{ip} is internet background noise (scanner) — likely not threat actor",
+                    "confidence": "CONFIRMED",
+                    "source": "GreyNoise"
+                })
+            elif classification == "malicious":
+                report["findings"].append({
+                    "text": f"{ip} classified MALICIOUS by GreyNoise — confirmed threat activity",
+                    "confidence": "CONFIRMED",
+                    "source": "GreyNoise"
+                })
+                # Boost confidence score for confirmed malicious
+                report["attribution"]["confidence_score"] = min(
+                    report["attribution"]["confidence_score"] + 15, 100
+                )
+
+    # Add VirusTotal findings (if key configured)
+    vt_key = keys.get("virustotal")
+    if vt_key and args.domain:
+        _progress("VirusTotal", args.quiet)
+        vt_result = pivot_virustotal_domain(args.domain, api_key=vt_key, timeout=args.timeout)
+        pivot_results["virustotal"] = vt_result
+        if not vt_result.get("errors"):
+            report["meta"]["sources_used"].append("VirusTotal")
+            malicious = vt_result.get("malicious", 0)
+            total     = vt_result.get("total_votes", 0)
+            verdict   = vt_result.get("verdict")
+            if malicious > 0:
+                report["findings"].append({
+                    "text": f"VirusTotal: {malicious}/{total} vendors flag as malicious — verdict: {verdict}",
+                    "confidence": "CONFIRMED" if malicious >= 5 else "ANALYST ASSESSMENT",
+                    "source": "VirusTotal"
+                })
+            if vt_result.get("categories"):
+                cats = ", ".join(list(vt_result["categories"])[:3])
+                report["findings"].append({
+                    "text": f"VirusTotal categories: {cats}",
+                    "confidence": "ANALYST ASSESSMENT",
+                    "source": "VirusTotal"
+                })
+            # Add related IPs as IOCs
+            for related_ip in vt_result.get("related_ips", [])[:5]:
+                report["iocs"].append({
+                    "type": "ip", "value": related_ip,
+                    "defanged": related_ip.replace(".", "[.]"),
+                    "source": "VirusTotal"
+                })
     tm = pivot_results.get("threatmatch", {})
     if tm:
         if tm.get("matches"):
