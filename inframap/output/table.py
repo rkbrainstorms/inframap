@@ -336,3 +336,76 @@ def print_hunt(result: dict, no_color: bool = False):
     print(_c(DIM, "  " + "─" * 62))
     print(_c(DIM, "  inframap | defang all IOCs before sharing | use responsibly"))
     print()
+
+def print_liveness(liveness: dict, no_color: bool = False):
+    global _NO_COLOR
+    _NO_COLOR = no_color
+
+    if not liveness:
+        return
+
+    live    = [(k, v) for k, v in liveness.items() if v.get("status") == "LIVE"]
+    dead    = [(k, v) for k, v in liveness.items() if v.get("status") == "DEAD"]
+    unknown = [(k, v) for k, v in liveness.items() if v.get("status") == "UNKNOWN"]
+
+    print()
+    print(_c(B, "  IOC LIVENESS"))
+    print(_c(DIM, "  " + "─" * 62))
+    print(f"  {_c(BGRN, f'LIVE: {len(live)}')}"
+          f"  {_c(BRED, f'DEAD: {len(dead)}')}"
+          f"  {_c(DIM, f'UNKNOWN: {len(unknown)}')}")
+    print()
+
+    if live:
+        print(_c(BGRN, "  LIVE"))
+        for ioc, data in live[:10]:
+            code = data.get("http_code", "")
+            ms   = data.get("latency_ms", "")
+            info = f"HTTP {code}" if code else ""
+            if ms:
+                info += f" ({ms}ms)"
+            defanged = ioc.replace(".", "[.]")
+            print(f"  ● {defanged:<40} {_c(DIM, info)}")
+
+    if dead:
+        print()
+        print(_c(BRED, "  DEAD"))
+        for ioc, data in dead[:10]:
+            defanged = ioc.replace(".", "[.]")
+            print(f"  ○ {_c(DIM, defanged)}")
+    print()
+
+
+def print_threatmatch(tm: dict, no_color: bool = False):
+    global _NO_COLOR
+    _NO_COLOR = no_color
+
+    if not tm:
+        return
+
+    matches  = tm.get("matches", [])
+    families = tm.get("malware_families", [])
+    checked  = tm.get("checked", 0)
+
+    print()
+    print(_c(B, "  THREATFOX / URLHAUS MATCHES"))
+    print(_c(DIM, "  " + "─" * 62))
+
+    if not matches:
+        print(f"  {_c(DIM, f'Checked {checked} IOCs — no matches in ThreatFox or URLhaus')}")
+        print()
+        return
+
+    print(f"  {_c(BRED, f'{len(matches)} match(es) found')} across {checked} IOCs checked")
+    if families:
+        print(f"  Malware families: {_c(BRED, ', '.join(families))}")
+    print()
+
+    print(f"  {'IOC':<35} {'SOURCE':<12} MALWARE/THREAT")
+    print(_c(DIM, "  " + "─" * 62))
+    for m in matches:
+        ioc      = m.get("ioc", "").replace(".", "[.]")[:33]
+        source   = m.get("source", "")
+        malware  = m.get("malware") or m.get("threat") or "known malicious"
+        print(f"  {_c(BRED, ioc):<44} {_c(DIM, source):<12} {malware}")
+    print()

@@ -2,6 +2,11 @@
 crt.sh pivot — Certificate Transparency log queries.
 No API key required. Queries the public crt.sh JSON API.
 
+Fallback chain when crt.sh is unavailable:
+  1. crt.sh (primary)
+  2. CertSpotter (free, no key, 100/hour)
+  3. Google CT (free, no key, no documented limit)
+
 Supports:
   - Exact domain:  example.com
   - Wildcard:      %.example.com  (also catches subdomains)
@@ -19,7 +24,7 @@ from datetime import datetime
 
 
 CRT_SH_URL = "https://crt.sh/?output=json&q={query}"
-USER_AGENT  = "inframap/1.0 (github.com/rhishav/inframap; CTI research)"
+USER_AGENT  = "inframap/1.3 (github.com/rkbrainstorms/inframap; CTI research)"
 
 
 def _fetch_crtsh(url: str, timeout: int, retries: int = 3) -> list:
@@ -42,16 +47,17 @@ def _fetch_crtsh(url: str, timeout: int, retries: int = 3) -> list:
 def pivot_crtsh(domain: str, timeout: int = 15, wildcard: bool = True) -> dict:
     """
     Query crt.sh for certificates associated with a domain.
-    Returns parsed cert list, extracted names, issuers, and timing clusters.
+    Automatically falls back to CertSpotter then Google CT on failure.
     """
     results = {
-        "query": domain,
+        "query":    domain,
         "wildcard": wildcard,
-        "certs": [],
+        "source":   "crt.sh",
+        "certs":    [],
         "unique_names": set(),
-        "issuers": {},
+        "issuers":  {},
         "timing_clusters": [],
-        "errors": []
+        "errors":   []
     }
 
     queries = []
@@ -61,6 +67,7 @@ def pivot_crtsh(domain: str, timeout: int = 15, wildcard: bool = True) -> dict:
 
     raw_certs = []
     seen_ids  = set()
+    crtsh_failed = False
 
     for q in queries:
         encoded = urllib.parse.quote(q, safe="")
@@ -74,9 +81,54 @@ def pivot_crtsh(domain: str, timeout: int = 15, wildcard: bool = True) -> dict:
                     raw_certs.append(cert)
         except urllib.error.HTTPError as e:
             results["errors"].append(f"crt.sh HTTP {e.code} for query '{q}'")
+            crtsh_failed = True
         except Exception as e:
             results["errors"].append(f"crt.sh error for query '{q}': {str(e)}")
-        time.sleep(0.3)  # be polite
+            crtsh_failed = True
+        time.sleep(0.3)
+
+    # Fallback to CertSpotter if crt.sh failed
+    if crtsh_failed and not raw_certs:
+        results["errors"].append("crt.sh unavailable — trying CertSpotter fallback")
+        try:
+            from inframap.pivots.certfallback import pivot_certspotter
+            fb = pivot_certspotter(domain, timeout=timeout)
+            if fb.get("cert_count", 0) > 0:
+                results["source"]       = "CertSpotter"
+                results["unique_names"] = set(fb.get("unique_names", []))
+                results["issuers"]      = fb.get("issuers", {})
+                results["cert_count"]   = fb.get("cert_count", 0)
+                results["certs"]        = fb.get("certs", [])
+                results["timing_clusters"] = []
+                results["errors"] = [e for e in results["errors"] if "crt.sh" not in e]
+                results["errors"].append(f"used CertSpotter fallback ({fb['cert_count']} certs)")
+                results["unique_names"] = sorted(results["unique_names"])
+                return results
+            else:
+                results["errors"].extend(fb.get("errors", []))
+        except Exception as e:
+            results["errors"].append(f"CertSpotter fallback error: {str(e)}")
+
+        # Final fallback: Google CT
+        results["errors"].append("CertSpotter unavailable — trying Google CT fallback")
+        try:
+            from inframap.pivots.certfallback import pivot_google_ct
+            fb = pivot_google_ct(domain, timeout=timeout)
+            if fb.get("cert_count", 0) > 0:
+                results["source"]       = "Google CT"
+                results["unique_names"] = set(fb.get("unique_names", []))
+                results["issuers"]      = fb.get("issuers", {})
+                results["cert_count"]   = fb.get("cert_count", 0)
+                results["certs"]        = fb.get("certs", [])
+                results["timing_clusters"] = []
+                results["errors"] = [e for e in results["errors"] if "crt.sh" not in e and "CertSpotter" not in e]
+                results["errors"].append(f"used Google CT fallback ({fb['cert_count']} certs)")
+                results["unique_names"] = sorted(results["unique_names"])
+                return results
+            else:
+                results["errors"].extend(fb.get("errors", []))
+        except Exception as e:
+            results["errors"].append(f"Google CT fallback error: {str(e)}")  # be polite
 
     for cert in raw_certs:
         parsed = _parse_cert(cert)

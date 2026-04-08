@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 """
 inframap — Open-source infrastructure fingerprinting & attribution engine
-Pivots across crt.sh, RDAP, urlscan.io, AbuseIPDB, BGP.he.net,
-HackerTarget passive DNS, and phishing kit detection.
+Pivots across crt.sh (+fallbacks), RDAP, urlscan.io, AbuseIPDB, BGP.he.net,
+HackerTarget passive DNS, Shodan InternetDB, ThreatFox, URLhaus, and more.
 Using only free/no-key APIs. Built for the CTI community.
-
-Usage:
-    python inframap.py -d example.com
-    python inframap.py -d evil.com --urlscan-key YOUR_KEY
-    python inframap.py --compare domain1.com domain2.com
-    python inframap.py -d evil.com -o markdown --out-file report.md
 """
 
 import argparse
@@ -26,13 +20,20 @@ from inframap.pivots.bgphe       import pivot_bgphe
 from inframap.pivots.passivedns  import pivot_passivedns
 from inframap.pivots.phishdetect import detect_phishing_kit
 from inframap.pivots.hunt        import hunt_infrastructure
+from inframap.pivots.internetdb  import pivot_internetdb
+from inframap.pivots.threatmatch import bulk_check_iocs
+from inframap.pivots.liveness    import check_liveness, summarise_liveness
 from inframap.engine.cluster     import cluster_certs, cluster_whois, score_asn
 from inframap.engine.confidence  import build_confidence_report
 from inframap.engine.compare     import compare_domains
-from inframap.output.table       import print_evidence_table, print_summary, print_compare, print_phishing, print_hunt
+from inframap.output.table       import (print_evidence_table, print_summary,
+                                          print_compare, print_phishing,
+                                          print_hunt, print_liveness,
+                                          print_threatmatch)
 from inframap.output.export      import export_csv, export_json, export_markdown
+from inframap.output.report      import generate_report
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 BANNER = r"""
   _        __                          
@@ -80,11 +81,17 @@ api keys (all optional, all free):
 
     modes = p.add_argument_group("modes")
     modes.add_argument("--compare", nargs=2, metavar=("DOMAIN_A", "DOMAIN_B"),
-                       help="compare two domains for shared operator (outputs shared-operator score)")
+                       help="compare two domains for shared operator score")
     modes.add_argument("--phishing", action="store_true",
                        help="run phishing kit detection on the seed domain")
     modes.add_argument("--hunt", action="store_true",
-                       help="proactive hunting mode — find newly registered suspicious domains")
+                       help="proactive hunting — find newly registered suspicious domains")
+    modes.add_argument("--live",  action="store_true",
+                       help="check liveness of all discovered IOCs (LIVE/DEAD/UNKNOWN)")
+    modes.add_argument("--threatcheck", action="store_true",
+                       help="check IOCs against ThreatFox + URLhaus (abuse.ch, no key)")
+    modes.add_argument("--report", action="store_true",
+                       help="generate full prose investigation report (saves to --out-file)")
     modes.add_argument("--asn",       metavar="ASN",
                        help="ASN to hunt (use with --hunt, e.g. AS43350)")
     modes.add_argument("--nameserver", metavar="NS",
@@ -265,12 +272,14 @@ def main():
             print()
 
         _progress("crt.sh certificate hunt", args.quiet)
+        # Hunt mode needs longer timeout — crt.sh can be slow for cert queries
+        hunt_timeout = max(args.timeout, 30)
         hunt_result = hunt_infrastructure(
             asn=args.asn,
             nameserver=args.nameserver,
             keyword=args.keyword,
             days=args.days,
-            timeout=args.timeout
+            timeout=hunt_timeout
         )
         print_hunt(hunt_result, no_color=args.no_color)
         return
@@ -351,7 +360,6 @@ def main():
     # Phishing kit detection (opt-in with --phishing flag)
     if args.phishing and "phishdetect" not in skip and args.domain:
         _progress("phishing kit detection", args.quiet)
-        # Pass cert and domain signals for infrastructure-level scoring
         crtsh_data   = pivot_results.get("crtsh", {})
         rdap_data    = pivot_results.get("rdap", {})
         bgphe_data   = pivot_results.get("bgphe", {})
@@ -365,6 +373,30 @@ def main():
             asn=bgphe_data.get("asn"),
             has_wildcard_san=len([n for n in crtsh_data.get("unique_names", []) if n.startswith("*.")]) > 0
         )
+
+    # Shodan InternetDB — always run on discovered IPs (no key needed)
+    internetdb_results = {}
+    all_ips = list(set(
+        ([args.ip] if args.ip else []) +
+        list(pivot_results.get("urlscan", {}).get("ips_seen", []))[:5]
+    ))
+    if all_ips and "internetdb" not in skip:
+        _progress(f"Shodan InternetDB ({len(all_ips[:3])} IPs)", args.quiet)
+        for ip in all_ips[:3]:
+            internetdb_results[ip] = pivot_internetdb(ip, timeout=args.timeout)
+            time.sleep(0.2)
+        pivot_results["internetdb"] = internetdb_results
+
+    # ThreatFox + URLhaus IOC matching (opt-in with --threatcheck)
+    if args.threatcheck:
+        _progress("ThreatFox + URLhaus IOC matching", args.quiet)
+        # Build IOC list from what we've found
+        iocs_to_check = []
+        if args.domain:
+            iocs_to_check.append({"type": "domain", "value": args.domain})
+        for ip in all_ips[:3]:
+            iocs_to_check.append({"type": "ip", "value": ip})
+        pivot_results["threatmatch"] = bulk_check_iocs(iocs_to_check, timeout=args.timeout)
 
     # depth-2 pivots (optional)
     depth2_results = {}
@@ -387,7 +419,7 @@ def main():
         depth2=depth2_results
     )
 
-    # Add passive DNS findings to report
+    # Add passive DNS findings
     pdns = pivot_results.get("passivedns", {})
     if pdns and pdns.get("resolution_count", 0) > 0:
         report["meta"]["sources_used"].append("HackerTarget")
@@ -406,12 +438,58 @@ def main():
                 "source": "HackerTarget"
             })
 
-    # Add phishing kit findings to report
+    # Add phishing kit findings
     phish = pivot_results.get("phishdetect", {})
     if phish and phish.get("kit_detected"):
         report["findings"].extend(phish.get("findings", []))
         report["infrastructure"]["phishing_score"] = phish.get("phishing_score")
         report["infrastructure"]["phishing_titles"] = phish.get("matched_titles", [])
+
+    # Add InternetDB findings
+    if internetdb_results:
+        report["meta"]["sources_used"].append("Shodan InternetDB")
+        for ip, idb in internetdb_results.items():
+            if idb.get("risk_label") in ("HIGH-RISK", "SUSPICIOUS"):
+                report["findings"].append({
+                    "text": f"{ip}: {idb['risk_label']} — {'; '.join(idb.get('risk_reasons', [])[:2])}",
+                    "confidence": "CONFIRMED" if idb["risk_label"] == "HIGH-RISK" else "ANALYST ASSESSMENT",
+                    "source": "Shodan InternetDB"
+                })
+            if idb.get("tags"):
+                report["infrastructure"][f"internetdb_{ip}_tags"] = idb["tags"]
+            if idb.get("vulns"):
+                report["findings"].append({
+                    "text": f"{ip} has {len(idb['vulns'])} known CVE(s): {', '.join(idb['vulns'][:3])}",
+                    "confidence": "CONFIRMED",
+                    "source": "Shodan InternetDB"
+                })
+
+    # Add ThreatFox/URLhaus findings
+    tm = pivot_results.get("threatmatch", {})
+    if tm and tm.get("matches"):
+        report["meta"]["sources_used"].append("ThreatFox/URLhaus")
+        for match in tm["matches"]:
+            report["findings"].append({
+                "text": f"{match['ioc']} matched in {match['source']}: {match.get('malware') or match.get('threat', 'known malicious')}",
+                "confidence": "CONFIRMED",
+                "source": match["source"]
+            })
+        if tm.get("malware_families"):
+            report["infrastructure"]["malware_families"] = tm["malware_families"]
+
+    # Liveness check (opt-in with --live)
+    liveness_data = {}
+    if args.live:
+        _progress(f"liveness check ({len(report['iocs'][:20])} IOCs)", args.quiet)
+        liveness_data = check_liveness(report["iocs"], timeout=5)
+        liveness_summary = summarise_liveness(liveness_data)
+        report["infrastructure"]["liveness"] = liveness_summary
+        if liveness_summary.get("live", 0) > 0:
+            report["findings"].append({
+                "text": f"{liveness_summary['live']}/{liveness_summary['total']} IOCs are currently LIVE",
+                "confidence": "CONFIRMED",
+                "source": "liveness-check"
+            })
 
     # output
     out_text = ""
@@ -420,6 +498,18 @@ def main():
         print_evidence_table(report, no_color=args.no_color)
         if args.phishing and phish:
             print_phishing(phish, no_color=args.no_color)
+        if args.live and liveness_data:
+            print_liveness(liveness_data, no_color=args.no_color)
+        if args.threatcheck and pivot_results.get("threatmatch"):
+            print_threatmatch(pivot_results["threatmatch"], no_color=args.no_color)
+        if args.report:
+            report_text = generate_report(report, pivot_results, liveness_data)
+            out_file = args.out_file or f"inframap_report_{(args.domain or args.ip or 'output').replace('.','_')}.md"
+            with open(out_file, "w", encoding="utf-8") as f:
+                f.write(report_text)
+            if not args.quiet:
+                print(f"\n[✓] investigation report written to {out_file}")
+        return
         return
     elif args.output == "csv":
         out_text = export_csv(report)
