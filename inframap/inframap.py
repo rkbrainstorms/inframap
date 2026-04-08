@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
 """
-inframap — Open-source infrastructure fingerprinting & attribution engine
-Pivots across crt.sh (+fallbacks), RDAP, urlscan.io, AbuseIPDB, BGP.he.net,
-HackerTarget passive DNS, Shodan InternetDB, ThreatFox, URLhaus, and more.
-Using only free/no-key APIs. Built for the CTI community.
+inframap — Infrastructure fingerprinting & attribution engine for CTI analysts.
+
+Tier 0: Runs with zero keys (crt.sh, RDAP, BGP.he.net, HackerTarget,
+         Shodan InternetDB, Mnemonic PDNS, CertSpotter, Google CT)
+Tier 1: Better results with free account keys (urlscan.io, AbuseIPDB,
+         ThreatFox, URLhaus, GreyNoise)
+Tier 2: Premium features with paid keys (Shodan full, VirusTotal)
+
+Key management:
+  inframap keys set urlscan YOUR_KEY
+  inframap keys set threatfox YOUR_KEY
+  inframap keys list
+  inframap keys remove urlscan
+
+Keys stored encrypted in ~/.config/inframap/keys (chmod 600, never logged)
 """
 
 import argparse
@@ -32,6 +43,8 @@ from inframap.output.table       import (print_evidence_table, print_summary,
                                           print_threatmatch)
 from inframap.output.export      import export_csv, export_json, export_markdown
 from inframap.output.report      import generate_report
+from inframap.config             import get_all_keys, set_key, remove_key, print_key_status as _print_key_status, SOURCES
+from inframap.validate           import validate_all_args
 
 VERSION = "1.4.0"
 
@@ -46,6 +59,7 @@ BANNER = r"""
   free & open source | no enterprise APIs required
 """
 
+
 def parse_args():
     p = argparse.ArgumentParser(
         prog="inframap",
@@ -53,98 +67,129 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  python inframap.py -d evil.com
-  python inframap.py -d evil.com --urlscan-key YOUR_KEY --abuseip-key YOUR_KEY
-  python inframap.py -d evil.com -o markdown --out-file report.md
-  python inframap.py --compare domain1.com domain2.com
-  python inframap.py -d evil.com --phishing
-  python inframap.py -d evil.com --depth 2 --quiet -o csv
-  python inframap.py -d evil.com --skip crtsh bgphe
+  inframap -d evil.com                          # keyless mode (tier 0 only)
+  inframap -d evil.com --threatcheck --live     # with stored keys
+  inframap --compare domain1.com domain2.com    # shared operator
+  inframap --hunt --keyword "outlook-verify"    # proactive hunting
+  inframap -d evil.com --report                 # auto-generate report
+  inframap keys set urlscan YOUR_KEY            # store key securely
+  inframap keys list                            # show key status
+  inframap keys remove urlscan                  # remove a key
 
-api keys (all optional, all free):
-  urlscan.io  : https://urlscan.io/user/signup       (1000 searches/day)
-  AbuseIPDB   : https://www.abuseipdb.com/register   (1000 checks/day)
-  crt.sh      : no key needed
-  RDAP        : no key needed
-  BGP.he.net  : no key needed
-  HackerTarget: no key needed                        (100 queries/day)
+tiers:
+  tier 0 — no key: crt.sh, RDAP, BGP.he.net, InternetDB, HackerTarget
+  tier 1 — free:   urlscan.io, AbuseIPDB, ThreatFox, URLhaus, GreyNoise
+  tier 2 — paid:   Shodan full, VirusTotal, SecurityTrails
         """
     )
 
     p.add_argument("--version", action="version", version=f"inframap {VERSION}")
 
     seed = p.add_argument_group("seed (provide at least one)")
-    seed.add_argument("-d", "--domain",  metavar="DOMAIN", help="seed domain (e.g. evil.com)")
-    seed.add_argument("-i", "--ip",      metavar="IP",     help="seed IP address")
-    seed.add_argument("-e", "--email",   metavar="EMAIL",  help="registrant email for WHOIS pivoting")
-    seed.add_argument("-c", "--cert",    metavar="HASH",   help="certificate SHA-256 fingerprint")
+    seed.add_argument("-d", "--domain",  metavar="DOMAIN")
+    seed.add_argument("-i", "--ip",      metavar="IP")
+    seed.add_argument("-e", "--email",   metavar="EMAIL")
+    seed.add_argument("-c", "--cert",    metavar="HASH")
 
     modes = p.add_argument_group("modes")
-    modes.add_argument("--compare", nargs=2, metavar=("DOMAIN_A", "DOMAIN_B"),
-                       help="compare two domains for shared operator score")
-    modes.add_argument("--phishing", action="store_true",
-                       help="run phishing kit detection on the seed domain")
-    modes.add_argument("--hunt", action="store_true",
-                       help="proactive hunting — find newly registered suspicious domains")
-    modes.add_argument("--live",  action="store_true",
-                       help="check liveness of all discovered IOCs (LIVE/DEAD/UNKNOWN)")
-    modes.add_argument("--threatcheck", action="store_true",
-                       help="check IOCs against ThreatFox + URLhaus (abuse.ch, no key)")
-    modes.add_argument("--report", action="store_true",
-                       help="generate full prose investigation report (saves to --out-file)")
-    modes.add_argument("--asn",       metavar="ASN",
-                       help="ASN to hunt (use with --hunt, e.g. AS43350)")
-    modes.add_argument("--nameserver", metavar="NS",
-                       help="nameserver to hunt (use with --hunt, e.g. topdns.com)")
-    modes.add_argument("--keyword",   metavar="KEYWORD",
-                       help="keyword to hunt in domain names (use with --hunt)")
-    modes.add_argument("--days",      type=int, default=30,
-                       help="look back N days for --hunt mode (default: 30)")
+    modes.add_argument("--compare",    nargs=2, metavar=("DOMAIN_A", "DOMAIN_B"))
+    modes.add_argument("--phishing",   action="store_true")
+    modes.add_argument("--hunt",       action="store_true")
+    modes.add_argument("--live",       action="store_true")
+    modes.add_argument("--threatcheck",action="store_true")
+    modes.add_argument("--report",     action="store_true")
+    modes.add_argument("--asn",        metavar="ASN")
+    modes.add_argument("--nameserver", metavar="NS")
+    modes.add_argument("--keyword",    metavar="KEYWORD")
+    modes.add_argument("--days",       type=int, default=30)
 
-    keys = p.add_argument_group("api keys (optional, all free-tier)")
-    keys.add_argument("--urlscan-key",  metavar="KEY", default=os.environ.get("URLSCAN_API_KEY"),
-                      help="urlscan.io API key (or set URLSCAN_API_KEY env var)")
-    keys.add_argument("--abuseip-key",  metavar="KEY", default=os.environ.get("ABUSEIPDB_API_KEY"),
-                      help="AbuseIPDB API key (or set ABUSEIPDB_API_KEY env var)")
+    keys_cmd = p.add_argument_group("key management (keys stored encrypted, never logged)")
+    keys_cmd.add_argument("keys", nargs="?", choices=["set", "list", "remove", "status"],
+                          help="manage API keys: set NAME VALUE | list | remove NAME")
+    keys_cmd.add_argument("key_name",  nargs="?", metavar="NAME",
+                          help="key name (urlscan, abuseip, threatfox, urlhaus, greynoise, shodan, virustotal)")
+    keys_cmd.add_argument("key_value", nargs="?", metavar="VALUE",
+                          help="key value (only for 'keys set')")
 
     opts = p.add_argument_group("options")
-    opts.add_argument("--depth",  type=int, default=1, choices=[1,2],
-                      help="pivot depth: 1=seed only, 2=pivot on discovered IPs/domains (default: 1)")
-    opts.add_argument("--skip",   nargs="+", metavar="SOURCE",
-                      choices=["crtsh","rdap","urlscan","abuseip","bgphe","passivedns","phishdetect"],
-                      help="skip specific sources")
+    opts.add_argument("--depth",    type=int, default=1, choices=[1,2])
+    opts.add_argument("--skip",     nargs="+", metavar="SOURCE")
     opts.add_argument("-o", "--output", default="table",
-                      choices=["table","csv","json","markdown"],
-                      help="output format (default: table)")
-    opts.add_argument("--out-file", metavar="FILE",
-                      help="write output to file instead of stdout")
-    opts.add_argument("-q", "--quiet",  action="store_true",
-                      help="suppress banner and progress, print results only")
-    opts.add_argument("--no-color",     action="store_true",
-                      help="disable ANSI color output")
-    opts.add_argument("--timeout", type=int, default=10,
-                      help="request timeout in seconds (default: 10)")
+                      choices=["table","csv","json","markdown"])
+    opts.add_argument("--out-file", metavar="FILE")
+    opts.add_argument("-q", "--quiet",   action="store_true")
+    opts.add_argument("--no-color",      action="store_true")
+    opts.add_argument("--timeout", type=int, default=10)
 
     return p.parse_args()
 
 
+def handle_keys_command(args):
+    """Handle inframap keys set/list/remove commands."""
+    cmd = args.keys
+
+    if cmd == "list" or cmd == "status":
+        print()
+        _print_key_status()
+        print()
+        return True
+
+    if cmd == "set":
+        if not args.key_name or not args.key_value:
+            print("[!] usage: inframap keys set NAME VALUE")
+            print("[!] names: urlscan, abuseip, threatfox, urlhaus, greynoise, shodan, virustotal")
+            return True
+        try:
+            from inframap.validate import sanitize_api_key
+            clean_val = sanitize_api_key(args.key_value)
+            if not clean_val:
+                print("[!] key value cannot be empty")
+                return True
+            set_key(args.key_name, clean_val)
+            print(f"[✓] {args.key_name} key stored securely in ~/.config/inframap/keys")
+            print(f"    permissions: 600 (owner read/write only)")
+        except ValueError as e:
+            print(f"[!] {e}")
+        return True
+
+    if cmd == "remove":
+        if not args.key_name:
+            print("[!] usage: inframap keys remove NAME")
+            return True
+        remove_key(args.key_name)
+        print(f"[✓] {args.key_name} key removed")
+        return True
+
+    return False
+
+
 def validate_args(args):
+    """Validate and sanitize all inputs."""
+    if args.keys:
+        return  # handled separately
+
     if args.compare:
         return
     if args.hunt:
         if not any([args.asn, args.nameserver, args.keyword]):
-            print("[!] --hunt requires one of: --asn ASN | --nameserver NS | --keyword WORD")
+            print("[!] --hunt requires: --asn ASN | --nameserver NS | --keyword WORD")
             sys.exit(1)
         return
     if not any([args.domain, args.ip, args.email, args.cert]):
-        print("[!] provide at least one seed: -d DOMAIN | -i IP | -e EMAIL | -c CERT_HASH")
-        print("[!] or use --compare DOMAIN_A DOMAIN_B for shared-operator analysis")
-        print("[!] or use --hunt --asn AS43350 for proactive hunting")
+        print("[!] provide a seed: -d DOMAIN | -i IP | -e EMAIL | -c HASH")
+        print("[!] or use: --compare A B | --hunt --keyword WORD | keys list")
+        sys.exit(1)
+
+    # Run full validation and sanitization
+    errors = validate_all_args(args)
+    if errors:
+        for err in errors:
+            print(f"[!] {err}")
         sys.exit(1)
 
 
-def run_pivots(args, skip):
-    results = {}
+def run_pivots(args, skip, keys):
+    results     = {}
     seed_domain = args.domain
     seed_ip     = args.ip
 
@@ -157,106 +202,111 @@ def run_pivots(args, skip):
         results["rdap"] = pivot_rdap(seed_domain, timeout=args.timeout)
 
     if "urlscan" not in skip:
-        _progress("urlscan.io", args.quiet)
+        urlscan_key = keys.get("urlscan")
+        if urlscan_key:
+            _progress("urlscan.io (tier 1 key)", args.quiet)
+        else:
+            _progress("urlscan.io (keyless — add key for more results)", args.quiet)
         results["urlscan"] = pivot_urlscan(
             domain=seed_domain, ip=seed_ip,
-            api_key=args.urlscan_key, timeout=args.timeout
+            api_key=urlscan_key, timeout=args.timeout
         )
 
-    # Auto-pivot: feed top discovered IPs from urlscan into AbuseIPDB + BGP
-    # even at depth-1 — this is the key fix so BGP/AbuseIPDB always run
-    discovered_ips = []
-    if results.get("urlscan"):
-        discovered_ips = list(results["urlscan"].get("ips_seen", []))[:3]
-
-    # Use seed IP first, then discovered IPs
-    ips_to_check = []
-    if seed_ip:
-        ips_to_check.append(seed_ip)
-    ips_to_check.extend([ip for ip in discovered_ips if ip != seed_ip])
-    ips_to_check = ips_to_check[:3]  # cap at 3 to respect rate limits
+    # Auto-pivot discovered IPs
+    discovered_ips = list(results.get("urlscan", {}).get("ips_seen", []))[:3]
+    ips_to_check   = list(set(([seed_ip] if seed_ip else []) + discovered_ips))[:3]
 
     if ips_to_check:
-        if "abuseip" not in skip and args.abuseip_key:
-            _progress(f"AbuseIPDB ({len(ips_to_check)} IPs)", args.quiet)
-            results["abuseip"] = pivot_abuseip(
-                ips_to_check[0], api_key=args.abuseip_key, timeout=args.timeout
-            )
-            # Store additional IP results
-            results["abuseip_extra"] = []
-            for extra_ip in ips_to_check[1:]:
-                time.sleep(0.5)
-                results["abuseip_extra"].append(
-                    pivot_abuseip(extra_ip, api_key=args.abuseip_key, timeout=args.timeout)
-                )
-        elif "abuseip" not in skip and not args.abuseip_key:
-            if not args.quiet:
-                print(f"  [~] AbuseIPDB skipped — no API key (free at abuseipdb.com)")
+        abuseip_key = keys.get("abuseip")
+        if "abuseip" not in skip:
+            if abuseip_key:
+                _progress(f"AbuseIPDB ({len(ips_to_check)} IPs)", args.quiet)
+                results["abuseip"] = pivot_abuseip(ips_to_check[0], api_key=abuseip_key, timeout=args.timeout)
+                results["abuseip_extra"] = []
+                for ip in ips_to_check[1:]:
+                    time.sleep(0.5)
+                    results["abuseip_extra"].append(pivot_abuseip(ip, api_key=abuseip_key, timeout=args.timeout))
+            else:
+                _progress_skip("AbuseIPDB", "abuseip", args.quiet)
 
         if "bgphe" not in skip:
             _progress(f"BGP.he.net ({len(ips_to_check)} IPs)", args.quiet)
             results["bgphe"] = pivot_bgphe(ips_to_check[0], timeout=args.timeout)
             results["bgphe_extra"] = []
-            for extra_ip in ips_to_check[1:]:
+            for ip in ips_to_check[1:]:
                 time.sleep(0.3)
-                results["bgphe_extra"].append(pivot_bgphe(extra_ip, args.timeout))
-    elif "abuseip" not in skip and not seed_ip:
+                results["bgphe_extra"].append(pivot_bgphe(ip, args.timeout))
+    elif "bgphe" not in skip and not seed_ip:
         if not args.quiet:
-            print(f"  [~] AbuseIPDB/BGP skipped — no IP discovered yet")
+            print(f"  [~] BGP/AbuseIPDB skipped — no IP discovered yet")
 
     return results
 
 
-def run_depth2(args, skip, pivot_results, quiet):
-    """Depth-2: pivot on IPs/domains discovered in depth-1."""
+def _progress(source, quiet):
+    if not quiet:
+        print(f"  [+] {source}...", flush=True)
+
+
+def _progress_skip(source, key_name, quiet):
+    if not quiet:
+        signup = SOURCES.get(key_name, {}).get("signup", "")
+        print(f"  [~] {source} skipped — add key: inframap keys set {key_name} YOUR_KEY"
+              + (f"  ({signup})" if signup else ""), flush=True)
+
+
+def run_depth2(args, skip, keys, pivot_results, quiet):
     discovered_ips     = set()
     discovered_domains = set()
 
-    crtsh_data = pivot_results.get("crtsh", {})
-    for cert in crtsh_data.get("certs", []):
+    for cert in pivot_results.get("crtsh", {}).get("certs", []):
         for name in cert.get("names", []):
             if name and name != args.domain:
                 discovered_domains.add(name.lstrip("*."))
 
-    urlscan_data = pivot_results.get("urlscan", {})
-    for scan in urlscan_data.get("results", []):
+    for scan in pivot_results.get("urlscan", {}).get("results", []):
         ip = scan.get("page", {}).get("ip")
         if ip:
             discovered_ips.add(ip)
 
     if not quiet:
-        print(f"\n[~] depth-2: found {len(discovered_ips)} IPs, {len(discovered_domains)} domains to pivot")
+        print(f"\n[~] depth-2: {len(discovered_ips)} IPs, {len(discovered_domains)} domains")
 
     depth2 = {"ips": {}, "domains": {}}
+    abuseip_key = keys.get("abuseip")
 
-    for ip in list(discovered_ips)[:5]:  # cap at 5 to respect rate limits
-        if "abuseip" not in skip and args.abuseip_key:
-            _progress(f"  AbuseIPDB → {ip}", quiet)
-            depth2["ips"][ip] = {"abuseip": pivot_abuseip(ip, args.abuseip_key, args.timeout)}
+    for ip in list(discovered_ips)[:5]:
+        if "abuseip" not in skip and abuseip_key:
+            depth2["ips"][ip] = {"abuseip": pivot_abuseip(ip, abuseip_key, args.timeout)}
             time.sleep(0.5)
         if "bgphe" not in skip:
-            _progress(f"  BGP.he.net → {ip}", quiet)
             depth2["ips"].setdefault(ip, {})["bgphe"] = pivot_bgphe(ip, args.timeout)
             time.sleep(0.5)
 
     for domain in list(discovered_domains)[:5]:
         if "rdap" not in skip:
-            _progress(f"  RDAP → {domain}", quiet)
             depth2["domains"][domain] = {"rdap": pivot_rdap(domain, args.timeout)}
             time.sleep(0.3)
 
     return depth2
 
 
-def _progress(source, quiet):
-    if not quiet:
-        print(f"  [+] pivoting {source}...", flush=True)
-
-
 def main():
-    args  = parse_args()
+    # Handle "inframap keys ..." before argparse
+    if len(sys.argv) > 1 and sys.argv[1] == "keys":
+        sys.argv.pop(1)
+    args = parse_args()
+
+    # Handle key management commands first
+    if args.keys:
+        handle_keys_command(args)
+        return
+
     validate_args(args)
-    skip  = set(args.skip or [])
+    skip = set(args.skip or [])
+
+    # Load all keys securely from encrypted store / env vars
+    keys = get_all_keys()
 
     if not args.quiet:
         print(BANNER)
@@ -270,16 +320,11 @@ def main():
             if args.keyword:    print(f"[*] keyword   : {args.keyword}")
             print(f"[*] days      : {args.days}")
             print()
-
         _progress("crt.sh certificate hunt", args.quiet)
-        # Hunt mode needs longer timeout — crt.sh can be slow for cert queries
         hunt_timeout = max(args.timeout, 30)
-        hunt_result = hunt_infrastructure(
-            asn=args.asn,
-            nameserver=args.nameserver,
-            keyword=args.keyword,
-            days=args.days,
-            timeout=hunt_timeout
+        hunt_result  = hunt_infrastructure(
+            asn=args.asn, nameserver=args.nameserver,
+            keyword=args.keyword, days=args.days, timeout=hunt_timeout
         )
         print_hunt(hunt_result, no_color=args.no_color)
         return
@@ -293,24 +338,25 @@ def main():
             print(f"[*] domain B  : {domain_b}")
             print()
 
+        urlscan_key = keys.get("urlscan")
         _progress(f"RDAP → {domain_a}", args.quiet)
-        rdap_a = pivot_rdap(domain_a, args.timeout)
+        rdap_a    = pivot_rdap(domain_a, args.timeout)
         _progress(f"crt.sh → {domain_a}", args.quiet)
-        crtsh_a = pivot_crtsh(domain_a, args.timeout)
+        crtsh_a   = pivot_crtsh(domain_a, args.timeout)
         _progress(f"passive DNS → {domain_a}", args.quiet)
-        pdns_a = pivot_passivedns(domain=domain_a, timeout=args.timeout)
+        pdns_a    = pivot_passivedns(domain=domain_a, timeout=args.timeout)
         _progress(f"urlscan.io → {domain_a}", args.quiet)
-        urlscan_a = pivot_urlscan(domain=domain_a, api_key=args.urlscan_key, timeout=args.timeout)
+        urlscan_a = pivot_urlscan(domain=domain_a, api_key=urlscan_key, timeout=args.timeout)
         time.sleep(0.5)
 
         _progress(f"RDAP → {domain_b}", args.quiet)
-        rdap_b = pivot_rdap(domain_b, args.timeout)
+        rdap_b    = pivot_rdap(domain_b, args.timeout)
         _progress(f"crt.sh → {domain_b}", args.quiet)
-        crtsh_b = pivot_crtsh(domain_b, args.timeout)
+        crtsh_b   = pivot_crtsh(domain_b, args.timeout)
         _progress(f"passive DNS → {domain_b}", args.quiet)
-        pdns_b = pivot_passivedns(domain=domain_b, timeout=args.timeout)
+        pdns_b    = pivot_passivedns(domain=domain_b, timeout=args.timeout)
         _progress(f"urlscan.io → {domain_b}", args.quiet)
-        urlscan_b = pivot_urlscan(domain=domain_b, api_key=args.urlscan_key, timeout=args.timeout)
+        urlscan_b = pivot_urlscan(domain=domain_b, api_key=urlscan_key, timeout=args.timeout)
 
         if not args.quiet:
             print("\n[*] running comparison engine...\n")
@@ -329,43 +375,40 @@ def main():
         seed_str = " | ".join(filter(None, [
             args.domain and f"domain={args.domain}",
             args.ip     and f"ip={args.ip}",
-            args.email  and f"email={args.email}",
-            args.cert   and f"cert={args.cert[:16]}...",
         ]))
-        all_sources = ['crtsh','rdap','urlscan','abuseip','bgphe','passivedns']
-        if args.phishing:
-            all_sources.append('phishdetect')
+        all_sources = ['crtsh','rdap','urlscan','bgphe','passivedns','internetdb']
+        if keys.get("abuseip"): all_sources.append('abuseip')
+        if args.phishing:       all_sources.append('phishdetect')
+        if args.threatcheck:    all_sources.append('threatfox/urlhaus')
+
+        # Count configured keys (masked)
+        configured = [k for k in ["urlscan","abuseip","threatfox","urlhaus","greynoise"] if keys.get(k)]
+        key_str    = f"{len(configured)} key(s) loaded" if configured else "keyless mode (tier 0)"
+
         print(f"[*] seed      : {seed_str}")
-        print(f"[*] depth     : {args.depth}")
         print(f"[*] sources   : {', '.join(s for s in all_sources if s not in skip)}")
-        keys_loaded = []
-        if args.urlscan_key: keys_loaded.append("urlscan")
-        if args.abuseip_key: keys_loaded.append("abuseip")
-        print(f"[*] api keys  : {', '.join(keys_loaded) if keys_loaded else 'none (keyless mode)'}")
+        print(f"[*] keys      : {key_str}")
         print(f"[*] output    : {args.output}")
         print()
 
-    # depth-1 pivots
-    pivot_results = run_pivots(args, skip)
+    pivot_results = run_pivots(args, skip, keys)
 
-    # Passive DNS (always run unless skipped)
+    # Passive DNS
     if "passivedns" not in skip and args.domain:
         _progress("HackerTarget passive DNS", args.quiet)
         pivot_results["passivedns"] = pivot_passivedns(
-            domain=args.domain,
-            ip=args.ip,
-            timeout=args.timeout
+            domain=args.domain, ip=args.ip, timeout=args.timeout
         )
 
-    # Phishing kit detection (opt-in with --phishing flag)
+    # Phishing kit detection
     if args.phishing and "phishdetect" not in skip and args.domain:
         _progress("phishing kit detection", args.quiet)
-        crtsh_data   = pivot_results.get("crtsh", {})
-        rdap_data    = pivot_results.get("rdap", {})
-        bgphe_data   = pivot_results.get("bgphe", {})
+        crtsh_data = pivot_results.get("crtsh", {})
+        rdap_data  = pivot_results.get("rdap", {})
+        bgphe_data = pivot_results.get("bgphe", {})
         pivot_results["phishdetect"] = detect_phishing_kit(
             domain=args.domain,
-            api_key=args.urlscan_key,
+            api_key=keys.get("urlscan"),
             timeout=args.timeout,
             domain_age_days=rdap_data.get("domain_age_days"),
             cert_fast_spin=any(c.get("suspicious") for c in crtsh_data.get("timing_clusters", [])),
@@ -374,7 +417,7 @@ def main():
             has_wildcard_san=len([n for n in crtsh_data.get("unique_names", []) if n.startswith("*.")]) > 0
         )
 
-    # Shodan InternetDB — always run on discovered IPs (no key needed)
+    # Shodan InternetDB (tier 0 — no key needed)
     internetdb_results = {}
     all_ips = list(set(
         ([args.ip] if args.ip else []) +
@@ -387,26 +430,38 @@ def main():
             time.sleep(0.2)
         pivot_results["internetdb"] = internetdb_results
 
-    # ThreatFox + URLhaus IOC matching (opt-in with --threatcheck)
+    # ThreatFox + URLhaus (tier 1 — needs free key)
     if args.threatcheck:
-        _progress("ThreatFox + URLhaus IOC matching", args.quiet)
-        # Build IOC list from what we've found
-        iocs_to_check = []
-        if args.domain:
-            iocs_to_check.append({"type": "domain", "value": args.domain})
-        for ip in all_ips[:3]:
-            iocs_to_check.append({"type": "ip", "value": ip})
-        pivot_results["threatmatch"] = bulk_check_iocs(iocs_to_check, timeout=args.timeout)
+        tf_key = keys.get("threatfox")
+        uh_key = keys.get("urlhaus")
+        if not tf_key and not uh_key:
+            if not args.quiet:
+                print(f"  [~] ThreatFox/URLhaus — add keys for threat matching:")
+                print(f"      inframap keys set threatfox YOUR_KEY  (free: auth.abuse.ch)")
+                print(f"      inframap keys set urlhaus YOUR_KEY    (same account)")
+        else:
+            _progress("ThreatFox + URLhaus IOC matching", args.quiet)
+            iocs_to_check = []
+            if args.domain:
+                iocs_to_check.append({"type": "domain", "value": args.domain})
+            for ip in all_ips[:3]:
+                iocs_to_check.append({"type": "ip", "value": ip})
+            pivot_results["threatmatch"] = bulk_check_iocs(
+                iocs_to_check,
+                timeout=args.timeout,
+                threatfox_key=tf_key,
+                urlhaus_key=uh_key
+            )
 
-    # depth-2 pivots (optional)
+    # Depth-2
     depth2_results = {}
     if args.depth == 2:
-        depth2_results = run_depth2(args, skip, pivot_results, args.quiet)
+        depth2_results = run_depth2(args, skip, keys, pivot_results, args.quiet)
 
     if not args.quiet:
         print("\n[*] running attribution engine...\n")
 
-    # engine
+    # Engine
     cert_clusters  = cluster_certs(pivot_results.get("crtsh", {}))
     whois_clusters = cluster_whois(pivot_results.get("rdap", {}))
     asn_score      = score_asn(pivot_results.get("bgphe", {}), pivot_results.get("abuseip", {}))
@@ -428,27 +483,24 @@ def main():
         for dom in pdns.get("unique_domains", [])[:20]:
             report["iocs"].append({
                 "type": "domain", "value": dom,
-                "defanged": dom.replace(".", "[.]"),
-                "source": "passivedns"
+                "defanged": dom.replace(".", "[.]"), "source": "passivedns"
             })
         if pdns.get("shared_hosts"):
             report["findings"].append({
                 "text": f"{len(pdns['shared_hosts'])} domain(s) co-hosted on same infrastructure",
-                "confidence": "ANALYST ASSESSMENT",
-                "source": "HackerTarget"
+                "confidence": "ANALYST ASSESSMENT", "source": "HackerTarget"
             })
 
-    # Add phishing kit findings
+    # Add phishing findings
     phish = pivot_results.get("phishdetect", {})
     if phish and phish.get("kit_detected"):
         report["findings"].extend(phish.get("findings", []))
-        report["infrastructure"]["phishing_score"] = phish.get("phishing_score")
+        report["infrastructure"]["phishing_score"]  = phish.get("phishing_score")
         report["infrastructure"]["phishing_titles"] = phish.get("matched_titles", [])
 
     # Add InternetDB findings
     if internetdb_results:
         report["meta"]["sources_used"].append("Shodan InternetDB")
-        idb_summary = []
         for ip, idb in internetdb_results.items():
             errors = idb.get("errors", [])
             ports  = idb.get("ports", [])
@@ -457,11 +509,8 @@ def main():
             risk   = idb.get("risk_label", "UNKNOWN")
 
             if errors:
-                # Still report what we know even with errors
-                idb_summary.append(f"{ip}: no data (InternetDB)")
                 continue
 
-            # Always add a finding for each IP we checked
             if risk in ("HIGH-RISK", "SUSPICIOUS"):
                 reasons = idb.get("risk_reasons", [])
                 report["findings"].append({
@@ -476,23 +525,18 @@ def main():
                     "source": "Shodan InternetDB"
                 })
 
-            if tags:
-                report["infrastructure"][f"internetdb_{ip}_tags"] = tags
-                if any(t in ("c2", "botnet", "malware", "phishing") for t in tags):
-                    report["findings"].append({
-                        "text": f"{ip} tagged as: {', '.join(tags)} by Shodan",
-                        "confidence": "CONFIRMED",
-                        "source": "Shodan InternetDB"
-                    })
+            if tags and any(t in ("c2", "botnet", "malware", "phishing") for t in tags):
+                report["findings"].append({
+                    "text": f"{ip} tagged: {', '.join(tags)} (Shodan)",
+                    "confidence": "CONFIRMED", "source": "Shodan InternetDB"
+                })
 
             if vulns:
                 report["findings"].append({
                     "text": f"{ip}: {len(vulns)} known CVE(s) — {', '.join(vulns[:3])}",
-                    "confidence": "CONFIRMED",
-                    "source": "Shodan InternetDB"
+                    "confidence": "CONFIRMED", "source": "Shodan InternetDB"
                 })
 
-        # Store full InternetDB data for output
         report["infrastructure"]["internetdb"] = internetdb_results
 
     # Add ThreatFox/URLhaus findings
@@ -502,16 +546,14 @@ def main():
             report["meta"]["sources_used"].append("ThreatFox/URLhaus")
             for match in tm["matches"]:
                 report["findings"].append({
-                    "text": f"{match['ioc']} matched in {match['source']}: {match.get('malware') or match.get('threat', 'known malicious')}",
-                    "confidence": "CONFIRMED",
-                    "source": match["source"]
+                    "text": f"{match['ioc']} in {match['source']}: {match.get('malware') or match.get('threat', 'known malicious')}",
+                    "confidence": "CONFIRMED", "source": match["source"]
                 })
             if tm.get("malware_families"):
                 report["infrastructure"]["malware_families"] = tm["malware_families"]
-        # Always store the note for display
         report["infrastructure"]["threatmatch_note"] = tm.get("note")
 
-    # Liveness check (opt-in with --live)
+    # Liveness check
     liveness_data = {}
     if args.live:
         _progress(f"liveness check ({len(report['iocs'][:20])} IOCs)", args.quiet)
@@ -520,12 +562,11 @@ def main():
         report["infrastructure"]["liveness"] = liveness_summary
         if liveness_summary.get("live", 0) > 0:
             report["findings"].append({
-                "text": f"{liveness_summary['live']}/{liveness_summary['total']} IOCs are currently LIVE",
-                "confidence": "CONFIRMED",
-                "source": "liveness-check"
+                "text": f"{liveness_summary['live']}/{liveness_summary['total']} IOCs currently LIVE",
+                "confidence": "CONFIRMED", "source": "liveness-check"
             })
 
-    # output
+    # Output
     out_text = ""
     if args.output == "table":
         print_summary(report, no_color=args.no_color)
@@ -542,8 +583,7 @@ def main():
             with open(out_file, "w", encoding="utf-8") as f:
                 f.write(report_text)
             if not args.quiet:
-                print(f"\n[✓] investigation report written to {out_file}")
-        return
+                print(f"\n[✓] report written to {out_file}")
         return
     elif args.output == "csv":
         out_text = export_csv(report)

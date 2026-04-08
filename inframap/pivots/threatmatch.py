@@ -1,14 +1,17 @@
 """
 abuse.ch IOC matching — ThreatFox + URLhaus.
-Both completely free, no API key required.
 
-ThreatFox: https://threatfox.abuse.ch/api/
-URLhaus: https://urlhaus-api.abuse.ch/
+ThreatFox: requires free Auth-Key from https://auth.abuse.ch/
+URLhaus:   requires free Auth-Key from https://auth.abuse.ch/
 
-These tell you if an IOC is ALREADY KNOWN in a malware campaign.
-Note: infrastructure domains (AiTM platforms, bulletproof hosters)
-are often NOT in these databases — they track malware delivery URLs
-and C2 endpoints, not the underlying hosting infrastructure.
+Both are free. Get your key in 30 seconds using GitHub/Google login.
+Store it: inframap keys set threatfox YOUR_KEY
+
+Without a key, this module runs in degraded mode and will return 401 errors.
+
+Note: These databases track malware delivery URLs and C2 endpoints.
+Infrastructure domains (AiTM platforms, bulletproof DNS providers) often
+return no matches even when confirmed malicious — this is expected.
 """
 
 import urllib.request
@@ -23,8 +26,8 @@ URLHAUS_URL   = "https://urlhaus-api.abuse.ch/v1/"
 USER_AGENT    = "inframap/1.4 (github.com/rkbrainstorms/inframap; CTI research)"
 
 
-def check_threatfox(ioc: str, timeout: int = 10) -> dict:
-    """Check an IOC against ThreatFox."""
+def check_threatfox(ioc: str, api_key: str = None, timeout: int = 10) -> dict:
+    """Check an IOC against ThreatFox. Free key required from auth.abuse.ch"""
     result = {
         "ioc":         ioc,
         "found":       False,
@@ -37,12 +40,20 @@ def check_threatfox(ioc: str, timeout: int = 10) -> dict:
         "errors":      []
     }
 
+    if not api_key:
+        result["errors"].append(
+            "ThreatFox: no key configured. "
+            "Get free key at auth.abuse.ch → run: inframap keys set threatfox YOUR_KEY"
+        )
+        return result
+
     try:
         payload = json.dumps({"query": "search_ioc", "search_term": ioc}).encode("utf-8")
         req = urllib.request.Request(
             THREATFOX_URL,
             data=payload,
             headers={
+                "Auth-Key":     api_key,
                 "User-Agent":   USER_AGENT,
                 "Content-Type": "application/json"
             }
@@ -61,15 +72,20 @@ def check_threatfox(ioc: str, timeout: int = 10) -> dict:
             result["reporter"]    = ioc_data.get("reporter")
 
     except urllib.error.HTTPError as e:
-        result["errors"].append(f"ThreatFox HTTP {e.code}")
+        if e.code == 401:
+            result["errors"].append(
+                "ThreatFox: invalid key. Get free key at auth.abuse.ch"
+            )
+        else:
+            result["errors"].append(f"ThreatFox HTTP {e.code}")
     except Exception as e:
         result["errors"].append(f"ThreatFox error: {str(e)}")
 
     return result
 
 
-def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
-    """Check a URL or domain against URLhaus."""
+def check_urlhaus(url_or_domain: str, api_key: str = None, timeout: int = 10) -> dict:
+    """Check a URL or domain against URLhaus. Free key from auth.abuse.ch"""
     result = {
         "query":      url_or_domain,
         "found":      False,
@@ -81,7 +97,13 @@ def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
         "errors":     []
     }
 
-    # Determine endpoint and payload
+    if not api_key:
+        result["errors"].append(
+            "URLhaus: no key configured. "
+            "Get free key at auth.abuse.ch → run: inframap keys set urlhaus YOUR_KEY"
+        )
+        return result
+
     if url_or_domain.startswith("http"):
         endpoint = f"{URLHAUS_URL}url/"
         payload  = urllib.parse.urlencode({"url": url_or_domain}).encode("utf-8")
@@ -94,6 +116,7 @@ def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
             endpoint,
             data=payload,
             headers={
+                "Auth-Key":     api_key,
                 "User-Agent":   USER_AGENT,
                 "Content-Type": "application/x-www-form-urlencoded"
             }
@@ -112,47 +135,54 @@ def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
             result["reporter"]   = latest.get("reporter")
 
     except urllib.error.HTTPError as e:
-        result["errors"].append(f"URLhaus HTTP {e.code}")
+        if e.code == 401:
+            result["errors"].append("URLhaus: invalid key. Get free key at auth.abuse.ch")
+        else:
+            result["errors"].append(f"URLhaus HTTP {e.code}")
     except Exception as e:
         result["errors"].append(f"URLhaus error: {str(e)}")
 
     return result
 
 
-def bulk_check_iocs(iocs: list, timeout: int = 10, api_key: str = None) -> dict:
+def bulk_check_iocs(iocs: list, threatfox_key: str = None,
+                    urlhaus_key: str = None, timeout: int = 10) -> dict:
     """
     Check multiple IOCs against ThreatFox and URLhaus.
-
-    Note: These databases track malware delivery URLs and C2 endpoints.
-    Infrastructure domains (AiTM platforms, bulletproof DNS) often return
-    no matches even when confirmed malicious — this is expected behaviour,
-    not a tool failure. Zero matches = not in known malware campaign DB.
+    Both require free keys from auth.abuse.ch
     """
     results = {
         "checked":          0,
         "matches":          [],
         "malware_families": set(),
         "errors":           [],
-        "note":             None
+        "note":             None,
+        "needs_keys":       not threatfox_key and not urlhaus_key
     }
+
+    if results["needs_keys"]:
+        results["note"] = (
+            "ThreatFox and URLhaus now require a free API key. "
+            "Get yours at https://auth.abuse.ch/ (30 seconds, use GitHub/Google login). "
+            "Then run: inframap keys set threatfox YOUR_KEY && inframap keys set urlhaus YOUR_KEY"
+        )
+        return results
 
     domains = [i["value"] for i in iocs if i.get("type") == "domain"][:5]
     ips     = [i["value"] for i in iocs if i.get("type") == "ip"][:5]
-
     all_errors = []
 
     for domain in domains:
         results["checked"] += 1
-        tf = check_threatfox(domain, timeout=timeout)
-        uh = check_urlhaus(domain, timeout=timeout)
+        tf = check_threatfox(domain, api_key=threatfox_key, timeout=timeout)
+        uh = check_urlhaus(domain, api_key=urlhaus_key, timeout=timeout)
 
         all_errors.extend(tf.get("errors", []))
         all_errors.extend(uh.get("errors", []))
 
         if tf.get("found"):
             results["matches"].append({
-                "ioc":     domain,
-                "type":    "domain",
+                "ioc":     domain, "type": "domain",
                 "source":  "ThreatFox",
                 "malware": tf.get("malware"),
                 "threat":  tf.get("threat_type"),
@@ -163,8 +193,7 @@ def bulk_check_iocs(iocs: list, timeout: int = 10, api_key: str = None) -> dict:
 
         if uh.get("found"):
             results["matches"].append({
-                "ioc":    domain,
-                "type":   "domain",
+                "ioc":    domain, "type": "domain",
                 "source": "URLhaus",
                 "threat": uh.get("threat"),
                 "status": uh.get("status"),
@@ -174,13 +203,12 @@ def bulk_check_iocs(iocs: list, timeout: int = 10, api_key: str = None) -> dict:
 
     for ip in ips:
         results["checked"] += 1
-        tf = check_threatfox(ip, timeout=timeout)
+        tf = check_threatfox(ip, api_key=threatfox_key, timeout=timeout)
         all_errors.extend(tf.get("errors", []))
         if tf.get("found"):
             results["matches"].append({
-                "ioc":     ip,
-                "type":    "ip",
-                "source":  "ThreatFox",
+                "ioc": ip, "type": "ip",
+                "source": "ThreatFox",
                 "malware": tf.get("malware"),
                 "threat":  tf.get("threat_type"),
             })
@@ -190,15 +218,15 @@ def bulk_check_iocs(iocs: list, timeout: int = 10, api_key: str = None) -> dict:
 
     results["malware_families"] = sorted(results["malware_families"])
 
-    # Add contextual note if no matches
     if not results["matches"] and results["checked"] > 0:
-        if any("error" in e.lower() for e in all_errors):
+        unique_errors = list(set(e for e in all_errors if "no key" not in e.lower()))
+        if unique_errors:
             results["note"] = "API errors occurred — results may be incomplete"
         else:
             results["note"] = (
                 "No matches found. ThreatFox/URLhaus track malware delivery URLs "
                 "and C2 endpoints. Infrastructure domains may not appear even "
-                "when confirmed malicious."
+                "when confirmed malicious — this is expected behaviour."
             )
 
     results["errors"] = list(set(all_errors))[:3]
