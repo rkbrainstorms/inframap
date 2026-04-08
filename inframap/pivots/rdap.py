@@ -69,7 +69,7 @@ def pivot_rdap(domain: str, timeout: int = 10) -> dict:
     return result
 
 
-def _calc_age(dates: dict) -> int | None:
+def _calc_age(dates: dict):  # -> Optional[int]
     """Calculate domain age in days from registration date."""
     registered = dates.get("registration") or dates.get("registrationdate", "")
     if not registered:
@@ -82,7 +82,7 @@ def _calc_age(dates: dict) -> int | None:
         return None
 
 
-def _resolve_rdap_server(domain: str, timeout: int) -> str | None:
+def _resolve_rdap_server(domain: str, timeout: int):  # -> Optional[str]
     """Bootstrap: find the correct RDAP server for a TLD."""
     global _bootstrap_cache
     tld = domain.split(".")[-1].lower()

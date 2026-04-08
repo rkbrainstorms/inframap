@@ -94,7 +94,7 @@ def pivot_bgphe(ip: str, timeout: int = 10) -> dict:
     return result
 
 
-def _fetch(url: str, timeout: int, result: dict) -> str | None:
+def _fetch(url: str, timeout: int, result: dict):  # -> Optional[str]
     try:
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
