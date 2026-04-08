@@ -448,34 +448,68 @@ def main():
     # Add InternetDB findings
     if internetdb_results:
         report["meta"]["sources_used"].append("Shodan InternetDB")
+        idb_summary = []
         for ip, idb in internetdb_results.items():
-            if idb.get("risk_label") in ("HIGH-RISK", "SUSPICIOUS"):
+            errors = idb.get("errors", [])
+            ports  = idb.get("ports", [])
+            tags   = idb.get("tags", [])
+            vulns  = idb.get("vulns", [])
+            risk   = idb.get("risk_label", "UNKNOWN")
+
+            if errors:
+                # Still report what we know even with errors
+                idb_summary.append(f"{ip}: no data (InternetDB)")
+                continue
+
+            # Always add a finding for each IP we checked
+            if risk in ("HIGH-RISK", "SUSPICIOUS"):
+                reasons = idb.get("risk_reasons", [])
                 report["findings"].append({
-                    "text": f"{ip}: {idb['risk_label']} — {'; '.join(idb.get('risk_reasons', [])[:2])}",
-                    "confidence": "CONFIRMED" if idb["risk_label"] == "HIGH-RISK" else "ANALYST ASSESSMENT",
+                    "text": f"{ip}: {risk} — {'; '.join(reasons[:2])}",
+                    "confidence": "CONFIRMED" if risk == "HIGH-RISK" else "ANALYST ASSESSMENT",
                     "source": "Shodan InternetDB"
                 })
-            if idb.get("tags"):
-                report["infrastructure"][f"internetdb_{ip}_tags"] = idb["tags"]
-            if idb.get("vulns"):
+            elif ports:
                 report["findings"].append({
-                    "text": f"{ip} has {len(idb['vulns'])} known CVE(s): {', '.join(idb['vulns'][:3])}",
+                    "text": f"{ip}: {len(ports)} open ports ({', '.join(str(p) for p in ports[:5])})",
+                    "confidence": "ANALYST ASSESSMENT",
+                    "source": "Shodan InternetDB"
+                })
+
+            if tags:
+                report["infrastructure"][f"internetdb_{ip}_tags"] = tags
+                if any(t in ("c2", "botnet", "malware", "phishing") for t in tags):
+                    report["findings"].append({
+                        "text": f"{ip} tagged as: {', '.join(tags)} by Shodan",
+                        "confidence": "CONFIRMED",
+                        "source": "Shodan InternetDB"
+                    })
+
+            if vulns:
+                report["findings"].append({
+                    "text": f"{ip}: {len(vulns)} known CVE(s) — {', '.join(vulns[:3])}",
                     "confidence": "CONFIRMED",
                     "source": "Shodan InternetDB"
                 })
 
+        # Store full InternetDB data for output
+        report["infrastructure"]["internetdb"] = internetdb_results
+
     # Add ThreatFox/URLhaus findings
     tm = pivot_results.get("threatmatch", {})
-    if tm and tm.get("matches"):
-        report["meta"]["sources_used"].append("ThreatFox/URLhaus")
-        for match in tm["matches"]:
-            report["findings"].append({
-                "text": f"{match['ioc']} matched in {match['source']}: {match.get('malware') or match.get('threat', 'known malicious')}",
-                "confidence": "CONFIRMED",
-                "source": match["source"]
-            })
-        if tm.get("malware_families"):
-            report["infrastructure"]["malware_families"] = tm["malware_families"]
+    if tm:
+        if tm.get("matches"):
+            report["meta"]["sources_used"].append("ThreatFox/URLhaus")
+            for match in tm["matches"]:
+                report["findings"].append({
+                    "text": f"{match['ioc']} matched in {match['source']}: {match.get('malware') or match.get('threat', 'known malicious')}",
+                    "confidence": "CONFIRMED",
+                    "source": match["source"]
+                })
+            if tm.get("malware_families"):
+                report["infrastructure"]["malware_families"] = tm["malware_families"]
+        # Always store the note for display
+        report["infrastructure"]["threatmatch_note"] = tm.get("note")
 
     # Liveness check (opt-in with --live)
     liveness_data = {}

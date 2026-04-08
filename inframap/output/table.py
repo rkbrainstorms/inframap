@@ -67,6 +67,9 @@ def print_summary(report: dict, no_color: bool = False):
     bar_filled = int(score / 2)
     bar = "█" * bar_filled + "░" * (50 - bar_filled)
     print(_c(tier_color, f"  │  [{bar}] {score:>3}/100  │"))
+    if attr.get("partial_data"):
+        warn = "⚠ partial data — crt.sh unavailable, score may be lower"
+        print(_c(YELLOW, f"  │  {warn:<58}│"))
     print(_c(tier_color, f"  └{'─' * 60}┘"))
     print()
 
@@ -386,13 +389,31 @@ def print_threatmatch(tm: dict, no_color: bool = False):
     matches  = tm.get("matches", [])
     families = tm.get("malware_families", [])
     checked  = tm.get("checked", 0)
+    note     = tm.get("note")
+    errors   = tm.get("errors", [])
 
     print()
     print(_c(B, "  THREATFOX / URLHAUS MATCHES"))
     print(_c(DIM, "  " + "─" * 62))
 
+    if errors:
+        for err in errors[:2]:
+            print(f"  {_c(YELLOW, '[!]')} {err}")
+
     if not matches:
-        print(f"  {_c(DIM, f'Checked {checked} IOCs — no matches in ThreatFox or URLhaus')}")
+        print(f"  {_c(DIM, f'Checked {checked} IOCs — no matches found')}")
+        if note:
+            # Word-wrap the note
+            words = note.split()
+            line  = "  "
+            for word in words:
+                if len(line) + len(word) > 70:
+                    print(_c(DIM, line))
+                    line = "  " + word + " "
+                else:
+                    line += word + " "
+            if line.strip():
+                print(_c(DIM, line))
         print()
         return
 
@@ -400,12 +421,11 @@ def print_threatmatch(tm: dict, no_color: bool = False):
     if families:
         print(f"  Malware families: {_c(BRED, ', '.join(families))}")
     print()
-
     print(f"  {'IOC':<35} {'SOURCE':<12} MALWARE/THREAT")
     print(_c(DIM, "  " + "─" * 62))
     for m in matches:
-        ioc      = m.get("ioc", "").replace(".", "[.]")[:33]
-        source   = m.get("source", "")
-        malware  = m.get("malware") or m.get("threat") or "known malicious"
+        ioc     = m.get("ioc", "").replace(".", "[.]")[:33]
+        source  = m.get("source", "")
+        malware = m.get("malware") or m.get("threat") or "known malicious"
         print(f"  {_c(BRED, ioc):<44} {_c(DIM, source):<12} {malware}")
     print()

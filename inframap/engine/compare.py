@@ -134,9 +134,7 @@ def compare_domains(rdap_a: dict, rdap_b: dict,
             indicators.append(f"co-hosted on same infrastructure: "
                              f"{', '.join(sorted(shared_cohosted)[:3])}")
 
-    # ── 8. IP subnet overlap (NEW) ─────────────────────────────────
-    # This catches campaign-level links where registrant data differs
-    # but infrastructure is shared (e.g. same /24 IP range)
+    # ── 8. IP subnet overlap ──────────────────────────────────────
     ips_a_all = set()
     ips_b_all = set()
 
@@ -149,21 +147,49 @@ def compare_domains(rdap_a: dict, rdap_b: dict,
     if urlscan_b:
         ips_b_all.update(urlscan_b.get("ips_seen", []))
 
-    # Check /24 subnet overlap
+    # Exact IP match
+    shared_ips = ips_a_all & ips_b_all
+    if shared_ips:
+        score += 25
+        indicators.append(
+            f"{len(shared_ips)} identical IP(s) seen on both domains: "
+            f"{', '.join(sorted(shared_ips)[:3])}"
+        )
+
+    # /24 subnet overlap
     subnets_a = _get_subnets(ips_a_all)
     subnets_b = _get_subnets(ips_b_all)
     shared_subnets = subnets_a & subnets_b
 
     if shared_subnets:
-        # Filter out mega-provider subnets
-        meaningful_subnets = {s for s in shared_subnets
-                             if not _is_mega_provider_subnet(s)}
-        if meaningful_subnets:
+        meaningful = {s for s in shared_subnets if not _is_mega_provider_subnet(s)}
+        if meaningful:
             score += 25
             indicators.append(
-                f"shared IP subnet(s) /24: {', '.join(sorted(meaningful_subnets)[:3])} "
+                f"shared IP subnet(s) /24: {', '.join(sorted(meaningful)[:3])} "
                 f"— infrastructure overlap"
             )
+
+    # ── 9. ASN overlap (fallback when IP data is sparse) ──────────
+    asns_a = set()
+    asns_b = set()
+    if urlscan_a:
+        asns_a.update(urlscan_a.get("asns_seen", []))
+    if urlscan_b:
+        asns_b.update(urlscan_b.get("asns_seen", []))
+
+    shared_asns = asns_a & asns_b
+    # Filter out mega-provider ASNs where overlap is meaningless
+    mega_asns = {"AS13335", "AS16509", "AS14618", "AS15169", "AS8075",
+                 "AS20940", "AS54113", "AS16625", "AS396982"}
+    meaningful_asns = shared_asns - mega_asns
+
+    if meaningful_asns:
+        score += 15
+        indicators.append(
+            f"shared non-major ASN(s): {', '.join(sorted(meaningful_asns)[:3])} "
+            f"— possible shared hosting"
+        )
 
     # ── Final scoring ──────────────────────────────────────────────
     score = min(score, 100)

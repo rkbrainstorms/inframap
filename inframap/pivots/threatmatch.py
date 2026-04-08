@@ -3,49 +3,42 @@ abuse.ch IOC matching — ThreatFox + URLhaus.
 Both completely free, no API key required.
 
 ThreatFox: https://threatfox.abuse.ch/api/
-  - Matches IOCs against known malware campaigns
-  - Returns malware family, threat type, confidence
-
 URLhaus: https://urlhaus-api.abuse.ch/
-  - Matches URLs/domains against known malware distribution URLs
-  - Returns malware tags, status (online/offline), reporter
 
-These two sources together tell you if an IOC is ALREADY KNOWN
-in a malware campaign — the highest-value signal for triage.
+These tell you if an IOC is ALREADY KNOWN in a malware campaign.
+Note: infrastructure domains (AiTM platforms, bulletproof hosters)
+are often NOT in these databases — they track malware delivery URLs
+and C2 endpoints, not the underlying hosting infrastructure.
 """
 
 import urllib.request
-import urllib.error
 import urllib.parse
+import urllib.error
 import json
 import time
 
 
-THREATFOX_URL  = "https://threatfox-api.abuse.ch/api/v1/"
-URLHAUS_URL    = "https://urlhaus-api.abuse.ch/v1/"
-USER_AGENT     = "inframap/1.3 (github.com/rkbrainstorms/inframap; CTI research)"
+THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1/"
+URLHAUS_URL   = "https://urlhaus-api.abuse.ch/v1/"
+USER_AGENT    = "inframap/1.4 (github.com/rkbrainstorms/inframap; CTI research)"
 
 
-def check_threatfox(ioc: str, ioc_type: str = "auto", timeout: int = 10) -> dict:
-    """
-    Check an IOC against ThreatFox database.
-    ioc_type: 'domain', 'ip:port', 'url', 'md5_hash', 'sha256_hash', or 'auto'
-    """
+def check_threatfox(ioc: str, timeout: int = 10) -> dict:
+    """Check an IOC against ThreatFox."""
     result = {
-        "ioc":          ioc,
-        "found":        False,
-        "malware":      None,
-        "threat_type":  None,
-        "confidence":   None,
-        "tags":         [],
-        "first_seen":   None,
-        "reporter":     None,
-        "errors":       []
+        "ioc":         ioc,
+        "found":       False,
+        "malware":     None,
+        "threat_type": None,
+        "confidence":  None,
+        "tags":        [],
+        "first_seen":  None,
+        "reporter":    None,
+        "errors":      []
     }
 
-    payload = json.dumps({"query": "search_ioc", "search_term": ioc}).encode("utf-8")
-
     try:
+        payload = json.dumps({"query": "search_ioc", "search_term": ioc}).encode("utf-8")
         req = urllib.request.Request(
             THREATFOX_URL,
             data=payload,
@@ -57,9 +50,7 @@ def check_threatfox(ioc: str, ioc_type: str = "auto", timeout: int = 10) -> dict
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
-        status = data.get("query_status", "")
-
-        if status == "ok" and data.get("data"):
+        if data.get("query_status") == "ok" and data.get("data"):
             ioc_data = data["data"][0] if isinstance(data["data"], list) else data["data"]
             result["found"]       = True
             result["malware"]     = ioc_data.get("malware_printable") or ioc_data.get("malware")
@@ -78,9 +69,7 @@ def check_threatfox(ioc: str, ioc_type: str = "auto", timeout: int = 10) -> dict
 
 
 def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
-    """
-    Check a URL or domain against URLhaus malware URL database.
-    """
+    """Check a URL or domain against URLhaus."""
     result = {
         "query":      url_or_domain,
         "found":      False,
@@ -92,20 +81,18 @@ def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
         "errors":     []
     }
 
-    # Determine if it's a URL or domain
+    # Determine endpoint and payload
     if url_or_domain.startswith("http"):
         endpoint = f"{URLHAUS_URL}url/"
-        payload  = f"url={urllib.parse.quote(url_or_domain)}"
+        payload  = urllib.parse.urlencode({"url": url_or_domain}).encode("utf-8")
     else:
         endpoint = f"{URLHAUS_URL}host/"
-        payload  = f"host={urllib.parse.quote(url_or_domain)}"
+        payload  = urllib.parse.urlencode({"host": url_or_domain}).encode("utf-8")
 
     try:
-
-        payload_bytes = payload.encode("utf-8")
         req = urllib.request.Request(
             endpoint,
-            data=payload_bytes,
+            data=payload,
             headers={
                 "User-Agent":   USER_AGENT,
                 "Content-Type": "application/x-www-form-urlencoded"
@@ -115,18 +102,14 @@ def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
             data = json.loads(resp.read().decode("utf-8"))
 
         status = data.get("query_status", "")
-
         if status in ("is_host", "ok") and data.get("urls"):
             result["found"] = True
-            # Get the most recent URL entry
-            urls = data["urls"]
-            if urls:
-                latest = urls[0]
-                result["status"]     = latest.get("url_status")
-                result["threat"]     = latest.get("threat")
-                result["tags"]       = latest.get("tags") or []
-                result["date_added"] = (latest.get("date_added") or "")[:10]
-                result["reporter"]   = latest.get("reporter")
+            latest = data["urls"][0]
+            result["status"]     = latest.get("url_status")
+            result["threat"]     = latest.get("threat")
+            result["tags"]       = latest.get("tags") or []
+            result["date_added"] = (latest.get("date_added") or "")[:10]
+            result["reporter"]   = latest.get("reporter")
 
     except urllib.error.HTTPError as e:
         result["errors"].append(f"URLhaus HTTP {e.code}")
@@ -136,28 +119,35 @@ def check_urlhaus(url_or_domain: str, timeout: int = 10) -> dict:
     return result
 
 
-def bulk_check_iocs(iocs: list, timeout: int = 10) -> dict:
+def bulk_check_iocs(iocs: list, timeout: int = 10, api_key: str = None) -> dict:
     """
-    Check multiple IOCs against both ThreatFox and URLhaus.
-    Returns a summary of matches with malware families found.
+    Check multiple IOCs against ThreatFox and URLhaus.
 
-    iocs: list of dicts with 'type' and 'value' keys
+    Note: These databases track malware delivery URLs and C2 endpoints.
+    Infrastructure domains (AiTM platforms, bulletproof DNS) often return
+    no matches even when confirmed malicious — this is expected behaviour,
+    not a tool failure. Zero matches = not in known malware campaign DB.
     """
-    results  = {
-        "checked":         0,
-        "matches":         [],
+    results = {
+        "checked":          0,
+        "matches":          [],
         "malware_families": set(),
-        "all_known":       False,
-        "errors":          []
+        "errors":           [],
+        "note":             None
     }
 
     domains = [i["value"] for i in iocs if i.get("type") == "domain"][:5]
     ips     = [i["value"] for i in iocs if i.get("type") == "ip"][:5]
 
+    all_errors = []
+
     for domain in domains:
         results["checked"] += 1
         tf = check_threatfox(domain, timeout=timeout)
         uh = check_urlhaus(domain, timeout=timeout)
+
+        all_errors.extend(tf.get("errors", []))
+        all_errors.extend(uh.get("errors", []))
 
         if tf.get("found"):
             results["matches"].append({
@@ -180,12 +170,12 @@ def bulk_check_iocs(iocs: list, timeout: int = 10) -> dict:
                 "status": uh.get("status"),
                 "tags":   uh.get("tags", [])
             })
-
         time.sleep(0.3)
 
     for ip in ips:
         results["checked"] += 1
         tf = check_threatfox(ip, timeout=timeout)
+        all_errors.extend(tf.get("errors", []))
         if tf.get("found"):
             results["matches"].append({
                 "ioc":     ip,
@@ -199,6 +189,17 @@ def bulk_check_iocs(iocs: list, timeout: int = 10) -> dict:
         time.sleep(0.3)
 
     results["malware_families"] = sorted(results["malware_families"])
-    results["all_known"] = len(results["matches"]) > 0
 
+    # Add contextual note if no matches
+    if not results["matches"] and results["checked"] > 0:
+        if any("error" in e.lower() for e in all_errors):
+            results["note"] = "API errors occurred — results may be incomplete"
+        else:
+            results["note"] = (
+                "No matches found. ThreatFox/URLhaus track malware delivery URLs "
+                "and C2 endpoints. Infrastructure domains may not appear even "
+                "when confirmed malicious."
+            )
+
+    results["errors"] = list(set(all_errors))[:3]
     return results

@@ -216,16 +216,22 @@ def build_confidence_report(
             score += CONFIDENCE_WEIGHTS["abuseip_high"]
 
     # ── Legitimacy dampening ────────────────────────────────────────
-    # If seed domain matches a known-clean brand, cap score at 30
-    # to avoid false positives on legitimate infrastructure
+    # Only dampen if the seed IS the known-clean domain itself
+    # e.g. google.com = dampen, but evil-google.com or onmicrosoft.co = do NOT dampen
     if domain:
         domain_lower = domain.lower()
+        # Strip www. prefix for comparison
         domain_stripped = domain_lower.lstrip("www.")
         for clean in KNOWN_CLEAN_DOMAINS:
-            if domain_stripped == clean + '.com' or domain_stripped == clean + '.org' or domain_stripped == clean + '.net' or domain_stripped.endswith('.' + clean + '.com'):
+            # Must be exact match or direct subdomain: google.com or mail.google.com
+            # NOT typosquats like google.co, google-login.com, onmicrosoft.co
+            if domain_stripped == clean + ".com" or \
+               domain_stripped == clean + ".org" or \
+               domain_stripped == clean + ".net" or \
+               domain_stripped.endswith("." + clean + ".com"):
                 score = min(score, 30)
                 report["findings"].append(_finding(
-                    f"seed domain matches known-clean brand '{clean}' — confidence capped",
+                    f"seed domain is known-clean brand '{clean}' — confidence capped",
                     "CIRCUMSTANTIAL",
                     "inframap"
                 ))
@@ -234,6 +240,19 @@ def build_confidence_report(
     # ── Overall confidence tier ──────────────────────────────────────
     score = min(score, 100)
     report["attribution"]["confidence_score"] = score
+
+    # Detect partial data — if crt.sh failed, note it affects score
+    crtsh_data    = (pivot_results or {}).get("crtsh", {})
+    crtsh_errors  = crtsh_data.get("errors", [])
+    crtsh_partial = crtsh_data.get("cert_count", 0) == 0 and len(crtsh_errors) > 0
+    if crtsh_partial:
+        report["attribution"]["partial_data"] = True
+        report["attribution"]["partial_note"] = (
+            "crt.sh unavailable during this run — cert signals missing. "
+            "Score may be lower than actual. Re-run when crt.sh recovers."
+        )
+    else:
+        report["attribution"]["partial_data"] = False
 
     if score >= 70:
         tier  = "HIGH"
