@@ -133,34 +133,58 @@ def hunt_infrastructure(asn: str = None, nameserver: str = None,
 
 def _hunt_by_keyword(keyword: str, days: int, timeout: int, result: dict) -> list:
     """Search crt.sh for domains containing a keyword."""
-    query    = f"%.{keyword}%"
+    # Use simple wildcard — less broad than %.keyword.% which times out
+    query    = f"%{keyword}%"
     encoded  = urllib.parse.quote(query, safe="")
     url      = CRT_SH_URL.format(query=encoded)
     domains  = []
+    cutoff   = datetime.now(timezone.utc) - timedelta(days=days)
 
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                if not raw or raw.strip() in ("[]", ""):
+                    break
+                data = json.loads(raw)
 
-        for cert in data:
-            name_value = cert.get("name_value", "")
-            not_before = cert.get("not_before", "")
-            issuer     = cert.get("issuer_name", "")
+            for cert in data:
+                not_before = cert.get("not_before", "")
+                issuer     = cert.get("issuer_name", "")
+                name_value = cert.get("name_value", "")
 
-            for name in re.split(r"[\n,]", name_value):
-                name = name.strip().lstrip("*.")
-                if name and keyword.lower() in name.lower():
-                    domains.append({
-                        "domain":     name,
-                        "not_before": not_before,
-                        "issuer":     _extract_org(issuer)
-                    })
+                # Pre-filter by date
+                if not_before:
+                    try:
+                        cert_date = datetime.fromisoformat(
+                            not_before.replace("Z", "+00:00")
+                        )
+                        if cert_date < cutoff:
+                            continue
+                    except Exception:
+                        pass
 
-    except urllib.error.HTTPError as e:
-        result["errors"].append(f"crt.sh HTTP {e.code}")
-    except Exception as e:
-        result["errors"].append(f"crt.sh error: {str(e)}")
+                for name in re.split(r"[\n,]", name_value):
+                    name = name.strip().lstrip("*.")
+                    if name and keyword.lower() in name.lower() and "." in name:
+                        domains.append({
+                            "domain":     name,
+                            "not_before": not_before,
+                            "issuer":     _extract_org(issuer)
+                        })
+            break
+
+        except urllib.error.HTTPError as e:
+            result["errors"].append(f"crt.sh HTTP {e.code}")
+            break
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            result["errors"].append(f"crt.sh error: {str(e)}")
+
+    return domains
 
     return domains
 
