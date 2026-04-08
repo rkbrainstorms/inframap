@@ -1,5 +1,7 @@
 # inframap
 
+[![CI](https://github.com/rkbrainstorms/inframap/actions/workflows/ci.yml/badge.svg)](https://github.com/rkbrainstorms/inframap/actions/workflows/ci.yml)
+
 **Open-source infrastructure fingerprinting & attribution engine for CTI analysts.**
 
 Chain certificate transparency logs, passive DNS, WHOIS fingerprinting, urlscan.io, AbuseIPDB, and BGP data into a single attribution report — using only **free, no-enterprise APIs**.
