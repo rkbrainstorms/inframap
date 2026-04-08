@@ -70,3 +70,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - urllib.parse import error in threatmatch.py
+
+## [1.5.0] — 2026-04-08
+
+### Added
+- VirusTotal pivot — domain and IP reputation (free key, 4/min)
+- VirusTotal findings wired into confidence scoring and report
+- Secure key management fully wired — tier 0/1/2 system
+- Input validation for all seed types
+- `inframap keys list/set/remove` — keys stored encrypted, chmod 600
+
+### Removed
+- GreyNoise — no longer offers free API tier
+
+### Fixed
+- urllib.parse import in threatmatch
+- Orphaned greynoise code removed cleanly
+- Confidence partial data warning when crt.sh unavailable
