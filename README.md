@@ -2,11 +2,7 @@
 
 [![CI](https://github.com/rkbrainstorms/inframap/actions/workflows/ci.yml/badge.svg)](https://github.com/rkbrainstorms/inframap/actions/workflows/ci.yml)
 
-**Open-source infrastructure fingerprinting & attribution engine for CTI analysts.**
-
-Chain certificate transparency logs, passive DNS, WHOIS fingerprinting, urlscan.io, AbuseIPDB, and BGP data into a single attribution report — using only **free, no-enterprise APIs**.
-
-Built for the security research community. No paywalls. No subscriptions. Just analyst tradecraft as code.
+Infrastructure fingerprinting and attribution engine for CTI analysts. Chains crt.sh, RDAP, passive DNS, urlscan.io, Shodan InternetDB, ThreatFox, URLhaus, AbuseIPDB, and BGP data into a single investigation workflow — free APIs only, no enterprise subscriptions.
 
 ```
   _        __                          
@@ -15,212 +11,178 @@ Built for the security research community. No paywalls. No subscriptions. Just a
  | | | | |  _| | | (_| | | | | | | (_| | |_) |
  |_|_| |_|_| |_|  \__,_|_| |_| |_|\__,_| .__/ 
                                          |_|    
-  infrastructure fingerprinting & attribution engine
-  free & open source | no enterprise APIs required
 ```
 
 ![inframap demo](demo.gif)
 
 ---
 
-## The problem it solves
+## Why this exists
 
-Every CTI analyst manually pivots across 5–8 separate tools — crt.sh, WHOIS, urlscan.io, AbuseIPDB, BGP.he.net, passive DNS — with no connective tissue between them. The moment you leave one tool, you lose the thread.
+CTI analysts pivot across 6-8 separate tools for every investigation — crt.sh, WHOIS, urlscan.io, BGP lookups, passive DNS, abuse databases. Each pivot is manual. Each tool loses the context from the last one. Writing the report at the end takes hours.
 
-inframap chains these pivots automatically and applies an **attribution confidence layer** on top — not just raw enrichment, but scored, tiered findings with documented evidence basis. The output is paste-ready for investigation reports.
+inframap chains all of that into one command and generates the report automatically.
 
 ---
 
-## Features
+## What it does
 
-- **Certificate transparency clustering** — groups certs by issuer/timing, detects fast-spin and wildcard abuse, supports `%.onion` wildcard queries
-- **WHOIS fingerprint hashing** — normalised RDAP-based registrant fingerprinting for cluster matching across domains
-- **Passive DNS** — HackerTarget reverse IP lookups reveal co-hosted domains and infrastructure reuse
-- **urlscan.io pivot** — searches existing scan history, extracts IPs, ASNs, page metadata
-- **Phishing kit detection** — scans urlscan.io page titles for credential harvesting patterns, AiTM indicators
-- **ASN / hosting risk scoring** — BGP.he.net + AbuseIPDB combined into a single hosting risk score
-- **Attribution confidence tiers** — `CONFIRMED`, `ANALYST ASSESSMENT`, `CIRCUMSTANTIAL` with evidence basis documented
-- **Shared operator comparison** — `--compare` two domains and get a scored shared-operator verdict
-- **Multiple output formats** — terminal table, CSV, JSON, Markdown (paste into reports directly)
-- **Defanged IOC output** — all IOCs defanged automatically, paste-safe
-- **Zero dependencies** — pure Python stdlib + urllib, no pip install required for core use
+**Standard investigation:**
+```bash
+python3 inframap.py -d onmicrosoft.co --threatcheck --live --report
+```
+
+Output (real run against a known AiTM phishing platform):
+```
+  ┌─ ATTRIBUTION CONFIDENCE ──────────────────────────────────┐
+  │  CONFIRMED                                                 │
+  │  [███████████████████████████████████████████████░░░]  95/100  │
+  └────────────────────────────────────────────────────────────┘
+
+  certs: 207  ·  domains: 85  ·  urlscan hits: 100
+
+  FINDINGS
+  CONFIRMED   crt.sh          fast-spin: ≥5 certs in one month
+  CONFIRMED   crt.sh          rapid issuance cluster
+  CONFIRMED   urlscan.io      100 scans found
+  CONFIRMED   liveness-check  25/30 IOCs currently LIVE
+
+  IOC LIVENESS
+  LIVE: 25  DEAD: 5  UNKNOWN: 0
+  ● banquelaurentienne[.]mail[.]onmicrosoft[.]co   TCP:443 (176ms)
+  ● citadellabs[.]mail[.]onmicrosoft[.]co          TCP:443 (182ms)
+  ● kpmg[.]mail[.]onmicrosoft[.]co                TCP:443 (178ms)
+
+[✓] investigation report written to inframap_report_onmicrosoft_co.md
+```
+
+**Compare two domains for shared operator:**
+```bash
+python3 inframap.py --compare domain1.com domain2.com
+```
+
+**Proactive hunting — find newly registered suspicious domains:**
+```bash
+python3 inframap.py --hunt --keyword "outlook-verify" --days 14
+```
+
+**Phishing kit detection:**
+```bash
+python3 inframap.py -d evil-domain.com --phishing
+```
 
 ---
 
 ## Installation
 
-### Option 1 — Clone and run (no install needed)
 ```bash
 git clone https://github.com/rkbrainstorms/inframap.git
 cd inframap
 python3 inframap.py --help
 ```
 
-### Option 2 — pip install
+No dependencies beyond Python 3.6+. Everything uses stdlib.
+
 ```bash
+# Or install via pip
 pip install git+https://github.com/rkbrainstorms/inframap.git
 inframap --help
 ```
 
 ---
 
-## Usage
+## All flags
 
-### Basic scan — domain only, no keys needed
-```bash
-python3 inframap.py -d evil-domain.com
 ```
-
-### Full scan with free API keys
-```bash
-python3 inframap.py -d evil-domain.com \
-  --urlscan-key YOUR_KEY \
-  --abuseip-key YOUR_KEY
-```
-
-### Compare two domains for shared operator
-```bash
-python3 inframap.py --compare domain1.com domain2.com
-```
-
-### Phishing kit detection
-```bash
-python3 inframap.py -d evil-domain.com --phishing
-```
-
-### IP pivot
-```bash
-python3 inframap.py -i 1.2.3.4 --abuseip-key YOUR_KEY
-```
-
-### Export to Markdown (paste into report)
-```bash
-python3 inframap.py -d evil-domain.com -o markdown --out-file evidence.md
-```
-
-### Export to CSV
-```bash
-python3 inframap.py -d evil-domain.com -o csv --out-file iocs.csv
-```
-
-### Depth-2 pivot
-```bash
-python3 inframap.py -d evil-domain.com --depth 2
-```
-
-### Quiet mode for scripting
-```bash
-python3 inframap.py -d evil-domain.com -q -o json | jq .attribution
-```
-
-### Skip specific sources
-```bash
-python3 inframap.py -d evil-domain.com --skip bgphe abuseip
-```
-
-### Environment variables
-```bash
-export URLSCAN_API_KEY=your_key
-export ABUSEIPDB_API_KEY=your_key
-python3 inframap.py -d evil-domain.com
+python3 inframap.py -d DOMAIN               # basic scan
+python3 inframap.py -i IP                   # IP pivot
+python3 inframap.py --compare A B           # shared operator score
+python3 inframap.py --hunt --keyword WORD   # proactive hunting
+python3 inframap.py -d DOMAIN --phishing    # phishing kit detection
+python3 inframap.py -d DOMAIN --live        # check IOC liveness
+python3 inframap.py -d DOMAIN --threatcheck # ThreatFox + URLhaus match
+python3 inframap.py -d DOMAIN --report      # generate prose report
+python3 inframap.py -d DOMAIN -o markdown   # markdown export
+python3 inframap.py -d DOMAIN -o csv        # CSV export
+python3 inframap.py -d DOMAIN -o json       # JSON export
+python3 inframap.py -d DOMAIN --depth 2     # pivot on discovered infra
+python3 inframap.py -d DOMAIN -q -o json | jq .  # pipe-friendly
 ```
 
 ---
 
-## Real-world example
+## Data sources
 
-Running against a known AiTM phishing platform:
+All free. Most need no account.
 
-```
-python3 inframap.py -d onmicrosoft.co --no-color
-
-  ┌─ ATTRIBUTION CONFIDENCE ──────────────────────────────────┐
-  │  CONFIRMED                                                 │
-  │  [███████████████████████████████████████████████░░░]  95/100  │
-  └────────────────────────────────────────────────────────────┘
-
-  certs: 207  ·  domains: 85  ·  urlscan hits: 105
-  HackerTarget: 1500 co-hosted domains on same infrastructure
-
-  FINDINGS
-  CONFIRMED        crt.sh       fast-spin: ≥5 certs issued in one month
-  CONFIRMED        crt.sh       rapid issuance cluster detected
-  CONFIRMED        urlscan.io   105 existing scans found
-  ANALYST ASSESS.  HackerTarget 1500 co-hosted domains on same infrastructure
-```
+| Source | What it provides | Key needed? |
+|--------|-----------------|-------------|
+| crt.sh | Certificate transparency logs | No |
+| CertSpotter | CT fallback when crt.sh is down | No |
+| Google CT | CT fallback #2 | No |
+| RDAP (IANA) | Structured WHOIS | No |
+| BGP.he.net | ASN, routing, hosting analysis | No |
+| HackerTarget | Passive DNS, reverse IP | No |
+| Mnemonic PDNS | Passive DNS fallback | No |
+| Shodan InternetDB | Open ports, CVEs, tags | No |
+| ThreatFox | Known malware IOC database | No |
+| URLhaus | Malware URL database | No |
+| urlscan.io | Scan history, page metadata | Optional (1k/day free) |
+| AbuseIPDB | IP abuse scoring | Optional (1k/day free) |
 
 ---
 
-## API keys
+## Attribution tiers
 
-All keys are **free tier**. inframap works without any keys (keyless mode).
-
-| Source | Key required? | Free tier | Get key |
-|--------|--------------|-----------|---------|
-| crt.sh | No | Unlimited | — |
-| RDAP (IANA) | No | Unlimited | — |
-| BGP.he.net | No | Unlimited | — |
-| HackerTarget | No | 100 queries/day | — |
-| urlscan.io | Optional | 1,000 searches/day | [urlscan.io/user/signup](https://urlscan.io/user/signup) |
-| AbuseIPDB | Optional (IP) | 1,000 checks/day | [abuseipdb.com/register](https://www.abuseipdb.com/register) |
-
----
-
-## Attribution confidence tiers
-
-| Tier | Label | Meaning |
-|------|-------|---------|
-| HIGH (70–100) | CONFIRMED | Multiple independent corroborating sources |
-| MEDIUM (40–69) | ANALYST ASSESSMENT | Single-source or inferred, documented evidence basis |
-| LOW (1–39) | CIRCUMSTANTIAL | Pattern match only, treat as investigative lead |
-| NONE (0) | INSUFFICIENT DATA | No data returned — check keys or seeds |
+| Score | Label | Meaning |
+|-------|-------|---------|
+| 70–100 | CONFIRMED | Multiple independent sources corroborate |
+| 40–69 | ANALYST ASSESSMENT | Documented evidence basis, single-source |
+| 1–39 | CIRCUMSTANTIAL | Pattern match, treat as lead |
+| 0 | INSUFFICIENT DATA | Check keys or try different seed |
 
 ---
 
 ## Architecture
 
 ```
-inframap.py                      Entry point wrapper
+inframap.py
 inframap/
-  inframap.py                    CLI orchestration
-  __main__.py                    pip entry point
   pivots/
-    crtsh.py                     Certificate transparency
-    rdap.py                      Structured WHOIS via RDAP
-    urlscan.py                   urlscan.io scan history
-    abuseip.py                   AbuseIPDB IP reputation
-    bgphe.py                     BGP.he.net ASN analysis
-    passivedns.py                HackerTarget passive DNS
-    phishdetect.py               Phishing kit detection
+    crtsh.py          CT logs (crt.sh + CertSpotter + Google CT fallback)
+    rdap.py           Structured WHOIS
+    urlscan.py        urlscan.io
+    abuseip.py        AbuseIPDB
+    bgphe.py          BGP.he.net
+    passivedns.py     HackerTarget + Mnemonic PDNS
+    phishdetect.py    Phishing kit detection
+    internetdb.py     Shodan InternetDB
+    threatmatch.py    ThreatFox + URLhaus
+    liveness.py       IOC liveness checking
+    hunt.py           Proactive hunting
+    certfallback.py   CertSpotter + Google CT
   engine/
-    cluster.py                   Cert & WHOIS clustering
-    confidence.py                Attribution confidence engine
-    compare.py                   Shared operator comparison
+    cluster.py        Cert + WHOIS clustering
+    confidence.py     Attribution scoring
+    compare.py        Shared operator comparison
   output/
-    table.py                     ANSI terminal output
-    export.py                    CSV, JSON, Markdown export
+    table.py          Terminal output
+    export.py         CSV, JSON, Markdown
+    report.py         Prose report generation
 ```
 
 ---
 
 ## Contributing
 
-PRs welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
-
-Core philosophy: **zero external dependencies**. stdlib + urllib only.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Zero external dependencies is non-negotiable — stdlib only.
 
 ---
 
-## Legal & ethics
+## Legal
 
-inframap queries only **passive, public data sources**. It does not scan, probe, or interact with target infrastructure directly. All IOC output is defanged by default.
-
-Use responsibly. For defensive research and threat intelligence purposes only.
+Queries passive, public data sources only. Does not scan or probe target infrastructure. All IOC output defanged by default.
 
 ---
 
-## License
-
-MIT License
-
-*Built by [@rkbrainstorms](https://github.com/rkbrainstorms)*
+MIT License · Built by [@rkbrainstorms](https://github.com/rkbrainstorms)
