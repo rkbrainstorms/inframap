@@ -34,20 +34,28 @@ from inframap.pivots.internetdb  import pivot_internetdb
 from inframap.pivots.threatmatch import bulk_check_iocs
 from inframap.pivots.liveness    import check_liveness, summarise_liveness
 from inframap.pivots.virustotal  import pivot_virustotal_domain, pivot_virustotal_ip
-from inframap.pivots.virustotal  import pivot_virustotal_domain, pivot_virustotal_ip
+from inframap.pivots.favicon     import pivot_favicon
+from inframap.pivots.wayback     import pivot_wayback
+from inframap.pivots.cidr        import pivot_cidr
+from inframap.pivots.mx          import pivot_mx
 from inframap.engine.cluster     import cluster_certs, cluster_whois, score_asn
 from inframap.engine.confidence  import build_confidence_report
 from inframap.engine.compare     import compare_domains
+from inframap.engine.campaign    import cluster_campaign
+from inframap.engine.mitre       import map_findings_to_attack, format_attack_table
+from inframap.engine.explain     import explain_score, format_explanation
 from inframap.output.table       import (print_evidence_table, print_summary,
                                           print_compare, print_phishing,
                                           print_hunt, print_liveness,
                                           print_threatmatch)
 from inframap.output.export      import export_csv, export_json, export_markdown
 from inframap.output.report      import generate_report
+from inframap.output.stix        import export_stix
 from inframap.config             import get_all_keys, set_key, remove_key, print_key_status as _print_key_status, SOURCES
 from inframap.validate           import validate_all_args
 
-VERSION = "1.4.0"
+
+VERSION = "1.5.0"
 
 BANNER = r"""
   _        __                          
@@ -93,10 +101,22 @@ tiers:
 
     modes = p.add_argument_group("modes")
     modes.add_argument("--compare",    nargs=2, metavar=("DOMAIN_A", "DOMAIN_B"))
+    modes.add_argument("--campaign",   nargs="+", metavar="SEED",
+                       help="cluster multiple seeds by shared operator")
     modes.add_argument("--phishing",   action="store_true")
     modes.add_argument("--hunt",       action="store_true")
     modes.add_argument("--live",       action="store_true")
     modes.add_argument("--threatcheck",action="store_true")
+    modes.add_argument("--favicon",    action="store_true",
+                       help="favicon hash hunting — find domains sharing same phishing kit")
+    modes.add_argument("--wayback",    action="store_true",
+                       help="Wayback Machine historical content analysis")
+    modes.add_argument("--cidr",       action="store_true",
+                       help="CIDR /24 range pivot — find co-tenant domains")
+    modes.add_argument("--mx",         action="store_true",
+                       help="MX record analysis for mail infrastructure signals")
+    modes.add_argument("--explain",    action="store_true",
+                       help="show detailed confidence score breakdown")
     modes.add_argument("--report",     action="store_true")
     modes.add_argument("--asn",        metavar="ASN")
     modes.add_argument("--nameserver", metavar="NS")
@@ -115,7 +135,7 @@ tiers:
     opts.add_argument("--depth",    type=int, default=1, choices=[1,2])
     opts.add_argument("--skip",     nargs="+", metavar="SOURCE")
     opts.add_argument("-o", "--output", default="table",
-                      choices=["table","csv","json","markdown"])
+                      choices=["table","csv","json","markdown","stix"])
     opts.add_argument("--out-file", metavar="FILE")
     opts.add_argument("-q", "--quiet",   action="store_true")
     opts.add_argument("--no-color",      action="store_true")
@@ -170,6 +190,8 @@ def validate_args(args):
 
     if args.compare:
         return
+    if getattr(args, "campaign", None):
+        return
     if args.hunt:
         if not any([args.asn, args.nameserver, args.keyword]):
             print("[!] --hunt requires: --asn ASN | --nameserver NS | --keyword WORD")
@@ -177,7 +199,7 @@ def validate_args(args):
         return
     if not any([args.domain, args.ip, args.email, args.cert]):
         print("[!] provide a seed: -d DOMAIN | -i IP | -e EMAIL | -c HASH")
-        print("[!] or use: --compare A B | --hunt --keyword WORD | keys list")
+        print("[!] or use: --compare A B | --hunt --keyword WORD | --campaign D1 D2 | keys list")
         sys.exit(1)
 
     # Run full validation and sanitization
@@ -313,6 +335,64 @@ def main():
 
     if not args.quiet:
         print(BANNER)
+
+    # ── CAMPAIGN MODE ────────────────────────────────────────────────
+    if args.campaign:
+        seeds = args.campaign
+        if not args.quiet:
+            print(f"[*] mode      : campaign clustering")
+            print(f"[*] seeds     : {', '.join(seeds)}")
+            print()
+
+        urlscan_key = keys.get("urlscan")
+        pivot_map   = {}
+
+        for seed in seeds:
+            if not args.quiet:
+                print(f"  [+] pivoting {seed}...")
+            pr = {}
+            pr["rdap"]      = pivot_rdap(seed, args.timeout)
+            pr["crtsh"]     = pivot_crtsh(seed, args.timeout)
+            pr["passivedns"]= pivot_passivedns(domain=seed, timeout=args.timeout)
+            pr["urlscan"]   = pivot_urlscan(domain=seed, api_key=urlscan_key, timeout=args.timeout)
+            pivot_map[seed] = pr
+            time.sleep(0.5)
+
+        if not args.quiet:
+            print("\n[*] running campaign clustering engine...\n")
+
+        cluster_result = cluster_campaign(seeds, pivot_map)
+
+        # Print results
+        print(f"\n{'━'*64}")
+        print(f"  INFRAMAP — CAMPAIGN CLUSTER ANALYSIS")
+        print(f"{'━'*64}")
+        print(f"\n  Seeds analysed: {len(seeds)}")
+        print(f"  Summary: {cluster_result['summary']}\n")
+
+        for i, cluster in enumerate(cluster_result["clusters"], 1):
+            verdict = cluster["verdict"]
+            cscore  = cluster["score"]
+            cseeds  = cluster["seeds"]
+            ev      = cluster.get("shared_evidence", [])
+
+            color_map = {
+                "SAME_OPERATOR": "🔴",
+                "RELATED":       "🟡",
+                "WEAK_LINK":     "🟠",
+                "ISOLATED":      "⚪",
+                "SINGLE":        "⚪"
+            }
+            icon = color_map.get(verdict, "⚪")
+
+            print(f"  {icon} Cluster {i}: {verdict} ({cscore}/100)")
+            for s in cseeds:
+                print(f"      • {s}")
+            if ev:
+                print(f"    Evidence: {' | '.join(ev[:3])}")
+            print()
+
+        return
 
     # ── HUNT MODE ────────────────────────────────────────────────────
     if args.hunt:
@@ -557,6 +637,8 @@ def main():
                     "confidence": "CONFIRMED", "source": "Shodan InternetDB"
                 })
 
+        report["infrastructure"]["internetdb"] = internetdb_results
+
     # Add VirusTotal findings (if key configured)
     vt_key = keys.get("virustotal")
     if vt_key and args.domain:
@@ -614,6 +696,94 @@ def main():
                 "confidence": "CONFIRMED", "source": "liveness-check"
             })
 
+    # Favicon hash hunting (tier 0/1)
+    if args.favicon and args.domain:
+        urlscan_key = keys.get("urlscan")
+        _progress("favicon hash hunting", args.quiet)
+        favicon_result = pivot_favicon(args.domain, api_key=urlscan_key, timeout=args.timeout)
+        pivot_results["favicon"] = favicon_result
+        if favicon_result.get("match_count", 0) > 0:
+            report["meta"]["sources_used"].append("favicon-hunt")
+            report["findings"].append({
+                "text": f"favicon hash matched {favicon_result['match_count']} other domain(s) — shared phishing kit",
+                "confidence": "CONFIRMED", "source": "favicon-hunt"
+            })
+            for dom in favicon_result.get("related_domains", [])[:10]:
+                report["iocs"].append({
+                    "type": "domain", "value": dom,
+                    "defanged": dom.replace(".", "[.]"),
+                    "source": "favicon-hunt"
+                })
+            if favicon_result.get("screenshot_url"):
+                report["infrastructure"]["screenshot_url"] = favicon_result["screenshot_url"]
+        if favicon_result.get("favicon", {}).get("hash"):
+            report["infrastructure"]["favicon_hash"] = favicon_result["favicon"]["hash"]
+
+    # Wayback Machine historical analysis (tier 0)
+    if args.wayback and args.domain:
+        _progress("Wayback Machine historical analysis", args.quiet)
+        wayback_result = pivot_wayback(args.domain, timeout=args.timeout)
+        pivot_results["wayback"] = wayback_result
+        if wayback_result.get("risk_signals"):
+            report["meta"]["sources_used"].append("Wayback Machine")
+            for signal in wayback_result["risk_signals"]:
+                report["findings"].append({
+                    "text": signal,
+                    "confidence": "ANALYST ASSESSMENT",
+                    "source": "Wayback Machine"
+                })
+        if wayback_result.get("phishing_titles"):
+            report["findings"].append({
+                "text": f"historical phishing pages found: {len(wayback_result['phishing_titles'])} archived",
+                "confidence": "CONFIRMED",
+                "source": "Wayback Machine"
+            })
+
+    # CIDR range pivot (tier 0)
+    if args.cidr and all_ips:
+        _progress(f"CIDR /24 range pivot ({all_ips[0]})", args.quiet)
+        cidr_result = pivot_cidr(all_ips[0], timeout=args.timeout)
+        pivot_results["cidr"] = cidr_result
+        if cidr_result.get("total_found", 0) > 0:
+            report["meta"]["sources_used"].append("CIDR-pivot")
+            report["findings"].append({
+                "text": f"{cidr_result['total_found']} co-tenant domain(s) found on {cidr_result.get('cidr', 'same /24')}",
+                "confidence": "ANALYST ASSESSMENT",
+                "source": "CIDR-pivot"
+            })
+            for dom in cidr_result.get("unique_domains", [])[:10]:
+                report["iocs"].append({
+                    "type": "domain", "value": dom,
+                    "defanged": dom.replace(".", "[.]"),
+                    "source": "cidr-pivot"
+                })
+
+    # MX record analysis (tier 0)
+    if args.mx and args.domain:
+        _progress("MX record analysis", args.quiet)
+        mx_result = pivot_mx(args.domain, timeout=args.timeout)
+        pivot_results["mx"] = mx_result
+        if mx_result.get("risk_signals"):
+            report["meta"]["sources_used"].append("MX-analysis")
+            for signal in mx_result["risk_signals"]:
+                report["findings"].append({
+                    "text": signal,
+                    "confidence": "ANALYST ASSESSMENT",
+                    "source": "MX-analysis"
+                })
+
+    # MITRE ATT&CK mapping (always if score >= 40)
+    attack_techniques = []
+    if report["attribution"].get("confidence_score", 0) >= 40:
+        attack_techniques = map_findings_to_attack(report)
+        if attack_techniques:
+            report["infrastructure"]["attack_techniques"] = attack_techniques
+
+    # Confidence score explanation
+    score_explanation = None
+    if args.explain:
+        score_explanation = explain_score(report, pivot_results)
+
     # Output
     out_text = ""
     if args.output == "table":
@@ -625,14 +795,30 @@ def main():
             print_liveness(liveness_data, no_color=args.no_color)
         if args.threatcheck and pivot_results.get("threatmatch"):
             print_threatmatch(pivot_results["threatmatch"], no_color=args.no_color)
+        if args.explain and score_explanation:
+            print(format_explanation(score_explanation))
+        if attack_techniques and not args.quiet:
+            print()
+            for t in attack_techniques[:5]:
+                tid  = t.get("technique_id", "")
+                name = t.get("technique_name", "")
+                tac  = t.get("tactic", "")
+                print(f"  [ATT&CK] {tid} — {name} ({tac})")
+            print()
         if args.report:
+            # Add ATT&CK table to report
+            attack_table = format_attack_table(attack_techniques)
             report_text = generate_report(report, pivot_results, liveness_data)
+            if attack_table:
+                report_text += "\n" + attack_table
             out_file = args.out_file or f"inframap_report_{(args.domain or args.ip or 'output').replace('.','_')}.md"
             with open(out_file, "w", encoding="utf-8") as f:
                 f.write(report_text)
             if not args.quiet:
                 print(f"\n[✓] report written to {out_file}")
         return
+    elif args.output == "stix":
+        out_text = export_stix(report, pivot_results)
     elif args.output == "csv":
         out_text = export_csv(report)
     elif args.output == "json":
