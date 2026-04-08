@@ -87,3 +87,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - urllib.parse import in threatmatch
 - Orphaned greynoise code removed cleanly
 - Confidence partial data warning when crt.sh unavailable
+
+## [1.5.0] — 2026-04-08
+
+### Added
+- `--favicon` — favicon hash hunting, finds phishing kit reuse across domains
+- `--wayback` — Wayback Machine historical content analysis
+- `--cidr` — /24 CIDR range pivot for co-tenant discovery
+- `--mx` — MX record analysis for mail infrastructure signals
+- `--campaign` — multi-seed campaign clustering (SAME_OPERATOR/RELATED/ISOLATED)
+- `--explain` — confidence score breakdown with signal details
+- `--watch` — continuous infrastructure monitoring with change alerts
+- `-o stix` — STIX 2.1 bundle export for SIEM/SOAR/MISP
+- MITRE ATT&CK auto-mapping in all scans
+- Encrypted key management fully wired (tier 0/1/2)
+
+### Fixed
+- Permanently removed orphaned greynoise code
+- sys.argv keys fix moved into parse_args — no manual workaround needed
