@@ -58,3 +58,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `--quiet` mode for scripting
 - `--no-color` for plain output
 - Environment variable support for API keys
+
+## [1.4.0] — 2026-04-08
+
+### Added
+- CT fallback chain — CertSpotter then Google CT when crt.sh is down
+- Shodan InternetDB — free, no key, auto-runs on discovered IPs
+- `--threatcheck` — ThreatFox + URLhaus IOC matching (abuse.ch, no key)
+- `--live` — parallel liveness check, LIVE/DEAD/UNKNOWN per IOC
+- `--report` — auto-generates complete prose investigation report
+
+### Fixed
+- urllib.parse import error in threatmatch.py
