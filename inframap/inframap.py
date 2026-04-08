@@ -51,6 +51,7 @@ from inframap.output.table       import (print_evidence_table, print_summary,
 from inframap.output.export      import export_csv, export_json, export_markdown
 from inframap.output.report      import generate_report
 from inframap.output.stix        import export_stix
+from inframap.watch              import run_watch
 from inframap.config             import get_all_keys, set_key, remove_key, print_key_status as _print_key_status, SOURCES
 from inframap.validate           import validate_all_args
 
@@ -70,6 +71,11 @@ BANNER = r"""
 
 
 def parse_args():
+    # Handle "inframap keys ..." before argparse sees it
+    # "keys" is not a valid argparse positional so we intercept it here
+    if len(sys.argv) > 1 and sys.argv[1] == "keys":
+        sys.argv.pop(1)
+
     p = argparse.ArgumentParser(
         prog="inframap",
         description="Infrastructure fingerprinting & attribution engine for CTI analysts",
@@ -115,6 +121,14 @@ tiers:
                        help="CIDR /24 range pivot — find co-tenant domains")
     modes.add_argument("--mx",         action="store_true",
                        help="MX record analysis for mail infrastructure signals")
+    modes.add_argument("--watch",      action="store_true",
+                       help="monitor domain for changes — alerts on new certs, IPs, liveness changes")
+    modes.add_argument("--interval",   type=int, default=24, metavar="HOURS",
+                       help="check interval in hours for --watch mode (default: 24)")
+    modes.add_argument("--baseline",   action="store_true",
+                       help="reset --watch baseline for domain")
+    modes.add_argument("--alert-file", metavar="FILE",
+                       help="save --watch alerts to JSON file")
     modes.add_argument("--explain",    action="store_true",
                        help="show detailed confidence score breakdown")
     modes.add_argument("--report",     action="store_true")
@@ -191,6 +205,8 @@ def validate_args(args):
     if args.compare:
         return
     if getattr(args, "campaign", None):
+        return
+    if getattr(args, "watch", False) and args.domain:
         return
     if args.hunt:
         if not any([args.asn, args.nameserver, args.keyword]):
@@ -318,8 +334,6 @@ def run_depth2(args, skip, keys, pivot_results, quiet):
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == "keys":
-        sys.argv.pop(1)
     args = parse_args()
 
     # Handle key management commands first
@@ -453,7 +467,76 @@ def main():
         print_compare(result, no_color=args.no_color)
         return
 
-    # ── STANDARD MODE ────────────────────────────────────────────────
+    # ── WATCH MODE ───────────────────────────────────────────────────
+    if args.watch:
+        if not args.domain:
+            print("[!] --watch requires -d DOMAIN")
+            sys.exit(1)
+
+        if not args.quiet:
+            print(f"[*] mode      : infrastructure monitoring")
+            print(f"[*] domain    : {args.domain}")
+            print(f"[*] interval  : every {args.interval}h")
+            if args.alert_file:
+                print(f"[*] alerts    : {args.alert_file}")
+            print()
+            print(f"  [watch] starting monitor — Ctrl+C to stop")
+            print(f"  [watch] state saved to ~/.config/inframap/watch/")
+
+        def _scan(domain):
+            """Run a standard scan and return (report, pivot_results)."""
+            _keys = get_all_keys()
+            _skip = set(args.skip or [])
+            _pr   = {}
+
+            _pr["crtsh"]     = pivot_crtsh(domain, timeout=args.timeout)
+            _pr["rdap"]      = pivot_rdap(domain, timeout=args.timeout)
+            _pr["urlscan"]   = pivot_urlscan(domain=domain, api_key=_keys.get("urlscan"), timeout=args.timeout)
+            _pr["passivedns"]= pivot_passivedns(domain=domain, timeout=args.timeout)
+
+            _ips = list(set(list(_pr["urlscan"].get("ips_seen", []))[:3]))
+            for _ip in _ips[:3]:
+                _pr.setdefault("bgphe", pivot_bgphe(_ip, args.timeout))
+            for _ip in _ips[:3]:
+                _pr.setdefault("internetdb", {})[_ip] = pivot_internetdb(_ip, timeout=args.timeout)
+                time.sleep(0.2)
+
+            # Liveness check for watch mode
+            _cc  = cluster_certs(_pr.get("crtsh", {}))
+            _wc  = cluster_whois(_pr.get("rdap", {}))
+            _as  = score_asn(_pr.get("bgphe", {}), {})
+            _rep = build_confidence_report(
+                domain=domain, ip=None,
+                cert_clusters=_cc, whois_clusters=_wc,
+                asn_score=_as, pivot_results=_pr, depth2={}
+            )
+
+            # Add passive DNS findings
+            _pdns = _pr.get("passivedns", {})
+            if _pdns:
+                for _dom in _pdns.get("unique_domains", [])[:20]:
+                    _rep["iocs"].append({
+                        "type": "domain", "value": _dom,
+                        "defanged": _dom.replace(".", "[.]"), "source": "passivedns"
+                    })
+
+            # Run liveness
+            _liv = check_liveness(_rep["iocs"], timeout=5)
+            _ls  = summarise_liveness(_liv)
+            _rep["infrastructure"]["liveness"] = _ls
+
+            return _rep, _pr
+
+        run_watch(
+            domain=args.domain,
+            interval_hours=args.interval,
+            reset_baseline=args.baseline,
+            alert_file=getattr(args, "alert_file", None),
+            no_color=args.no_color,
+            quiet=args.quiet,
+            scan_fn=_scan
+        )
+        return
     if not args.quiet:
         seed_str = " | ".join(filter(None, [
             args.domain and f"domain={args.domain}",

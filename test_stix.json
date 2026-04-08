@@ -1,0 +1,243 @@
+{
+  "type": "bundle",
+  "id": "bundle--aeb6bd5a-0d1d-4384-ab37-23d9c1b43383",
+  "spec_version": "2.1",
+  "objects": [
+    {
+      "type": "identity",
+      "spec_version": "2.1",
+      "id": "identity--inframap-rkbrainstorms",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "inframap",
+      "identity_class": "tool",
+      "description": "Open-source infrastructure attribution engine (github.com/rkbrainstorms/inframap)"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--abeb7494-e59b-5a93-9e8c-ccae2a558559",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "domain: onmicrosoft.co",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: seed",
+      "pattern": "[domain-name:value = 'onmicrosoft.co']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--8c2fd672-0818-5c51-b421-d191f6d4c050",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "domain: ww1.onmicrosoft.co",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: crt.sh",
+      "pattern": "[domain-name:value = 'ww1.onmicrosoft.co']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--a72814d6-232c-5079-b9fa-46654ac2d307",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 13.33.52.208",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '13.33.52.208']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--c4e2b7c2-0fc8-51db-82c0-d40a69e331bf",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 172.67.68.172",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '172.67.68.172']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--4bca1fb0-e64b-51da-ab3e-1890a10c3371",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 208.91.196.145",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '208.91.196.145']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--304a5f1f-6394-58a1-a083-82be7078db25",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 212.92.104.116",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '212.92.104.116']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--3db7f72d-cdf1-529f-9910-59eecca9d36b",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 212.92.104.119",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '212.92.104.119']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--6530c680-a72e-5db2-9ae4-39a3a346f5cd",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 212.92.104.122",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '212.92.104.122']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--6e806624-2bad-513e-9754-163c36ab639b",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 212.92.104.2",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '212.92.104.2']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--cb9bf952-d08d-5530-82bc-aec933bd67e6",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 212.92.104.6",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '212.92.104.6']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--85c89009-48f1-52dd-b485-3cfcfd8c152d",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 23.227.38.65",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '23.227.38.65']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "indicator",
+      "spec_version": "2.1",
+      "id": "indicator--4680f128-02a8-5bf9-a4cd-2782464dbf70",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "name": "ip: 23.227.38.74",
+      "description": "IOC discovered via inframap from seed onmicrosoft.co. Source: urlscan.io",
+      "pattern": "[ipv4-addr:value = '23.227.38.74']",
+      "pattern_type": "stix",
+      "valid_from": "2026-04-08T12:07:12Z",
+      "labels": [
+        "malicious-activity"
+      ],
+      "confidence": 20,
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    },
+    {
+      "type": "note",
+      "spec_version": "2.1",
+      "id": "note--cac80840-e262-53e4-8091-2875c8be31a7",
+      "created": "2026-04-08T12:07:12Z",
+      "modified": "2026-04-08T12:07:12Z",
+      "abstract": "inframap investigation: onmicrosoft.co \u2014 CIRCUMSTANTIAL (20/100)",
+      "content": "Automated investigation by inframap v1.4.0.\nSeed: onmicrosoft.co\nConfidence: 20/100 (CIRCUMSTANTIAL)\nSources used: crt.sh, RDAP, urlscan.io, BGP.he.net, AbuseIPDB, Shodan InternetDB, VirusTotal\nGenerated: 2026-04-08T12:07:12Z\n\nKey findings:\n- [CONFIRMED] urlscan.io: 107 existing scan(s) found on urlscan.io\n- [ANALYST ASSESSMENT] Shodan InternetDB: 212.92.104.119: 6 open ports (53, 80, 443, 1022, 8080)\n- [ANALYST ASSESSMENT] Shodan InternetDB: 13.33.52.208: 2 open ports (80, 443)\n- [ANALYST ASSESSMENT] Shodan InternetDB: 172.67.68.172: 12 open ports (80, 443, 2052, 2082, 2083)\n- [CONFIRMED] VirusTotal: VirusTotal: 12/94 vendors flag as malicious \u2014 verdict: MALICIOUS\n- [ANALYST ASSESSMENT] VirusTotal: VirusTotal categories: phishing and fraud, web infrastructure",
+      "object_refs": [
+        "indicator--abeb7494-e59b-5a93-9e8c-ccae2a558559",
+        "indicator--8c2fd672-0818-5c51-b421-d191f6d4c050",
+        "indicator--a72814d6-232c-5079-b9fa-46654ac2d307",
+        "indicator--c4e2b7c2-0fc8-51db-82c0-d40a69e331bf",
+        "indicator--4bca1fb0-e64b-51da-ab3e-1890a10c3371",
+        "indicator--304a5f1f-6394-58a1-a083-82be7078db25",
+        "indicator--3db7f72d-cdf1-529f-9910-59eecca9d36b",
+        "indicator--6530c680-a72e-5db2-9ae4-39a3a346f5cd",
+        "indicator--6e806624-2bad-513e-9754-163c36ab639b",
+        "indicator--cb9bf952-d08d-5530-82bc-aec933bd67e6"
+      ],
+      "created_by_ref": "identity--inframap-rkbrainstorms"
+    }
+  ]
+}
