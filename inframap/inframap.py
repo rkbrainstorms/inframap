@@ -296,6 +296,8 @@ def run_depth2(args, skip, keys, pivot_results, quiet):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "keys":
+        sys.argv.pop(1)
     args = parse_args()
 
     # Handle key management commands first
@@ -554,36 +556,6 @@ def main():
                     "text": f"{ip}: {len(vulns)} known CVE(s) — {', '.join(vulns[:3])}",
                     "confidence": "CONFIRMED", "source": "Shodan InternetDB"
                 })
-
-        report["infrastructure"]["internetdb"] = internetdb_results
-
-    gn_results = pivot_results.get( {})
-    if gn_results:
-        for ip, gn in gn_results.items():
-            if gn.get("errors"):
-                continue
-            classification = gn.get("classification", "unknown")
-            noise = gn.get("noise", False)
-            riot  = gn.get("riot", False)
-
-            if riot:
-                report["findings"].append({
-                    "text": f"{ip} is known benign infrastructure ({gn.get('name', 'RIOT')}) — deprioritise",
-                    "confidence": "CONFIRMED",
-                })
-            elif noise and classification == "benign":
-                report["findings"].append({
-                    "text": f"{ip} is internet background noise (scanner) — likely not threat actor",
-                    "confidence": "CONFIRMED",
-                })
-            elif classification == "malicious":
-                report["findings"].append({
-                    "confidence": "CONFIRMED",
-                })
-                # Boost confidence score for confirmed malicious
-                report["attribution"]["confidence_score"] = min(
-                    report["attribution"]["confidence_score"] + 15, 100
-                )
 
     # Add VirusTotal findings (if key configured)
     vt_key = keys.get("virustotal")
